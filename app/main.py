@@ -145,15 +145,16 @@ async def get_ingestion_status(job_id: str):
 @app.post("/api/query", response_model=QueryResponse)
 async def query_knowledge_base(request: QueryRequest):
     """
-    Query the knowledge base.
+    Query the knowledge base using RAG (Retrieval-Augmented Generation).
     
-    Searches across all ingested repositories and returns relevant results.
+    Retrieves relevant documents from ingested repositories and uses Claude Sonnet 4
+    to generate a comprehensive answer based on the retrieved context.
     """
     try:
         from services.bedrock_service import BedrockService
         
         bedrock_service = BedrockService()
-        results = await bedrock_service.query(
+        rag_result = await bedrock_service.query(
             query=request.query,
             max_results=request.max_results,
             filter_type=request.filter_type,
@@ -162,8 +163,9 @@ async def query_knowledge_base(request: QueryRequest):
         
         return QueryResponse(
             query=request.query,
-            results=results,
-            total_results=len(results)
+            answer=rag_result['answer'],
+            sources=rag_result['sources'],
+            total_sources=len(rag_result['sources'])
         )
         
     except Exception as e:

@@ -71,10 +71,11 @@ class SearchResult(BaseModel):
 
 
 class QueryResponse(BaseModel):
-    """Response for query request."""
+    """Response for query request with RAG."""
     query: str
-    results: List[SearchResult]
-    total_results: int
+    answer: str = Field(..., description="LLM-generated answer based on retrieved context")
+    sources: List[SearchResult] = Field(..., description="Source documents used to generate the answer")
+    total_sources: int
 
 
 class Repository(BaseModel):

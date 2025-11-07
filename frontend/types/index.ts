@@ -58,8 +58,9 @@ export interface QueryRequest {
 
 export interface QueryResponse {
   query: string;
-  results: SearchResult[];
-  total_results: number;
+  answer: string;
+  sources: SearchResult[];
+  total_sources: number;
 }
 
 export interface Repository {

@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     data_source_id: str = ""
     s3_bucket_name: str = ""
     
+    # AWS Bedrock Model Configuration
+    bedrock_model_id: str = "anthropic.claude-sonnet-4-20250514-v1:0"
+    
     # GitHub Configuration
     github_token: Optional[str] = None
     

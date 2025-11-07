@@ -1,15 +1,28 @@
 # RAG Knowledge Platform
 
-An all-in-one knowledge platform for software products that vectorizes GitHub repositories (code, commits, issues, PRs) using AWS Bedrock Knowledge Base.
+An all-in-one AI-powered knowledge platform that combines semantic search with **Claude Sonnet 4** to answer questions about your codebase using Retrieval-Augmented Generation (RAG).
 
-## Features
+## 🎯 What This Does
 
-- 🔍 **Intelligent Code Search**: Search across entire codebases with semantic understanding
+Instead of just searching your code, **ask questions in natural language** and get comprehensive AI-generated answers based on your actual codebase:
+
+- ❓ "How does authentication work in this project?"
+- 🔍 "Where is the payment processing logic?"
+- 🐛 "What issues mention performance problems?"
+- 📚 "Explain the database architecture"
+
+The system retrieves relevant code, commits, issues, and PRs, then uses **Claude Sonnet 4** to synthesize a clear answer with source references.
+
+## ✨ Features
+
+- 🤖 **RAG with Claude Sonnet 4**: AI-generated answers based on retrieved context
+- 🔍 **Intelligent Code Search**: Semantic understanding across entire codebases
 - 📝 **Commit History**: Query commit messages and diffs
 - 🐛 **Issue Tracking**: Search through all issues and discussions
 - 🔀 **Pull Request Analysis**: Find relevant PRs and their reviews
-- 🤖 **AI-Powered**: Powered by AWS Bedrock's advanced embedding models
-- 🚀 **Easy to Use**: Simple REST API and modern web interface
+- 📊 **Source Traceability**: Every answer includes source documents for verification
+- 🎨 **Beautiful UI**: Modern interface with syntax highlighting and collapsible sources
+- 🚀 **Easy to Use**: Simple REST API and web interface
 
 ## Architecture
 
@@ -26,11 +39,19 @@ An all-in-one knowledge platform for software products that vectorizes GitHub re
                     └──────────────┘
                            │
                            ▼
-                    ┌──────────────┐     ┌─────────────┐
-                    │   AWS S3     │────▶│   Bedrock   │
-                    │   Bucket     │     │ Knowledge   │
-                    └──────────────┘     │    Base     │
-                                         └─────────────┘
+       ┌────────────────────────────────────────┐
+       │                                        │
+       ▼                                        ▼
+┌──────────────┐     ┌─────────────┐    ┌──────────────┐
+│   AWS S3     │────▶│   Bedrock   │    │   Claude     │
+│   Bucket     │     │ Knowledge   │◀───│  Sonnet 4    │
+└──────────────┘     │    Base     │    │  (via Bedrock)│
+                     └─────────────┘    └──────────────┘
+                                              │
+                      Query Flow:              │
+                      1. Retrieve docs ────────┘
+                      2. Generate answer with Claude
+                      3. Return answer + sources
 ```
 
 ## AWS Setup Instructions
@@ -82,7 +103,25 @@ An all-in-one knowledge platform for software products that vectorizes GitHub re
 8. Click **Create role**
 9. **Note down the Role ARN** (e.g., `arn:aws:iam::123456789012:role/BedrockKnowledgeBaseRole`)
 
-### Step 3: Create Bedrock Knowledge Base
+### Step 3: Enable Claude Model Access
+
+**⚠️ IMPORTANT: This step is required for RAG functionality**
+
+1. Navigate to **Amazon Bedrock** → **Model access**
+2. Click **Modify model access** or **Manage model access**
+3. Find **Anthropic** section
+4. Check the boxes for:
+   - ✅ Claude 3.5 Sonnet
+   - ✅ Claude Sonnet 4 (if available)
+   - ✅ Claude 3.5 Sonnet v2
+5. Review the **End User License Agreement (EULA)**
+6. Click **Request model access** or **Save changes**
+7. Wait for approval (usually instant for most AWS accounts)
+8. Verify status shows **Access granted** for Claude models
+
+**Note**: Without Claude model access, queries will fail with "Model not found" errors.
+
+### Step 4: Create Bedrock Knowledge Base
 
 1. Navigate to **Amazon Bedrock** → **Knowledge bases**
 2. Click **Create knowledge base**
@@ -113,7 +152,7 @@ An all-in-one knowledge platform for software products that vectorizes GitHub re
     - **Knowledge Base ID** (e.g., `ABCDEFGHIJ`)
     - **Data Source ID** (found in the data source details)
 
-### Step 4: Create IAM User for API Access
+### Step 5: Create IAM User for API Access
 
 1. Navigate to **IAM** → **Users**
 2. Click **Add users**
@@ -163,15 +202,51 @@ An all-in-one knowledge platform for software products that vectorizes GitHub re
    - Secret Access Key
    - ⚠️ **Keep these secure!**
 
-### Step 5: Enable Bedrock Models (if needed)
+### Step 6: Verify Setup
 
-1. Navigate to **Amazon Bedrock** → **Model access**
-2. Click **Manage model access**
-3. Enable the following models:
-   - Titan Embeddings (for embeddings)
-   - Any LLM models you want to use for generation (optional)
-4. Click **Save changes**
-5. Wait for access to be granted (usually instant)
+**Checklist - Ensure you have:**
+- ✅ S3 bucket created and noted
+- ✅ IAM role for Knowledge Base created with S3 permissions
+- ✅ Claude model access enabled (Sonnet 4 or 3.5)
+- ✅ Bedrock Knowledge Base created with data source
+- ✅ IAM user created with access keys
+- ✅ All IDs noted down:
+  - Knowledge Base ID
+  - Data Source ID
+  - S3 Bucket name
+  - AWS Access Key ID
+  - AWS Secret Access Key
+
+**Important IAM Permissions for API User:**
+
+Your IAM user needs these permissions:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock-runtime:InvokeModel",
+        "bedrock-agent-runtime:Retrieve",
+        "bedrock-agent:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:*"
+      ],
+      "Resource": [
+        "arn:aws:s3:::YOUR_BUCKET_NAME/*",
+        "arn:aws:s3:::YOUR_BUCKET_NAME"
+      ]
+    }
+  ]
+}
+```
 
 ## Backend Setup
 

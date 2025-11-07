@@ -37,7 +37,7 @@ export default function SearchBar({ onSearch, isLoading = false }: SearchBarProp
         fullWidth
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search for code, commits, issues, or pull requests..."
+        placeholder="Ask AI about your code: 'How does authentication work?' or 'Explain the payment flow'"
         variant="outlined"
         disabled={isLoading}
         InputProps={{
