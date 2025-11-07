@@ -13,6 +13,8 @@ import {
   CommitListResponse,
   CommitDetail,
   CommitExplanation,
+  ChatRequest,
+  ChatResponse,
 } from '@/types';
 
 class ApiClient {
@@ -87,6 +89,15 @@ class ApiClient {
   async explainCommit(repoUrl: string, commitSha: string): Promise<CommitExplanation> {
     const response = await this.client.get<CommitExplanation>(
       `/api/repositories/${encodeURIComponent(repoUrl)}/commits/${commitSha}/explain`
+    );
+    return response.data;
+  }
+
+  // Chat about a commit
+  async chatAboutCommit(repoUrl: string, commitSha: string, chatRequest: ChatRequest): Promise<ChatResponse> {
+    const response = await this.client.post<ChatResponse>(
+      `/api/repositories/${encodeURIComponent(repoUrl)}/commits/${commitSha}/chat`,
+      chatRequest
     );
     return response.data;
   }

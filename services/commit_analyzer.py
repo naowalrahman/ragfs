@@ -218,3 +218,107 @@ Return your response in JSON format with these keys: summary, what_changed, why_
                 'business_impact': None,
                 'generated_at': datetime.now(timezone.utc)
             }
+    
+    def chat_about_commit(
+        self,
+        commit_sha: str,
+        commit_message: str,
+        author: str,
+        date: datetime,
+        diff: str,
+        user_message: str,
+        conversation_history: list = None,
+        file_list: Optional[list] = None
+    ) -> str:
+        """
+        Have a conversation about a commit.
+        
+        Args:
+            commit_sha: The commit SHA
+            commit_message: The commit message
+            author: The commit author
+            date: The commit date
+            diff: The git diff for the commit
+            user_message: The user's question/message
+            conversation_history: Previous messages in the conversation
+            file_list: Optional list of files changed
+            
+        Returns:
+            The assistant's response
+        """
+        try:
+            # Build conversation context
+            files_changed_str = ""
+            if file_list:
+                files_changed_str = f"\n\nFiles changed ({len(file_list)}):\n" + "\n".join(f"  - {f}" for f in file_list[:20])
+                if len(file_list) > 20:
+                    files_changed_str += f"\n  ... and {len(file_list) - 20} more files"
+            
+            # Truncate diff if too long
+            max_diff_length = 10000
+            diff_display = diff[:max_diff_length]
+            if len(diff) > max_diff_length:
+                diff_display += f"\n\n... (diff truncated, showing first {max_diff_length} characters of {len(diff)})"
+            
+            # Build the system prompt with commit context
+            system_context = f"""You are an expert code reviewer helping developers understand git commits.
+
+Commit Context:
+- SHA: {commit_sha[:8]}
+- Message: {commit_message}
+- Author: {author}
+- Date: {date.strftime('%Y-%m-%d %H:%M:%S')}{files_changed_str}
+
+Diff:
+```
+{diff_display}
+```
+
+Answer the user's questions about this commit clearly and concisely. Focus on explaining:
+- What the code changes do functionally
+- Why the changes were made
+- Technical implications
+- Potential impacts
+
+Be conversational and helpful. If the user asks about specific parts of the code, refer to the diff above."""
+
+            # Build messages array
+            messages = []
+            
+            # Add conversation history if it exists
+            if conversation_history:
+                for msg in conversation_history:
+                    messages.append({
+                        "role": msg.get("role"),
+                        "content": msg.get("content")
+                    })
+            
+            # Add current user message
+            messages.append({
+                "role": "user",
+                "content": user_message
+            })
+            
+            # Call Claude
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 2000,
+                "temperature": 0.7,
+                "system": system_context,
+                "messages": messages
+            }
+            
+            response = self.bedrock_runtime.invoke_model(
+                modelId=self.model_id,
+                body=json.dumps(request_body)
+            )
+            
+            response_body = json.loads(response['body'].read())
+            assistant_message = response_body['content'][0]['text']
+            
+            logger.info(f"Generated chat response for commit {commit_sha[:8]}")
+            return assistant_message
+            
+        except Exception as e:
+            logger.error(f"Failed to generate chat response for commit {commit_sha[:8]}: {str(e)}")
+            raise

@@ -137,3 +137,20 @@ export interface CommitExplanation {
   generated_at: string;
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface ChatRequest {
+  message: string;
+  conversation_history: ChatMessage[];
+}
+
+export interface ChatResponse {
+  commit_sha: string;
+  message: ChatMessage;
+  conversation_history: ChatMessage[];
+}
+

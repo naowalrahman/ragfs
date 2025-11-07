@@ -24,6 +24,9 @@ from models.schemas import (
     CommitDetail,
     CommitExplanation,
     FileChange,
+    ChatRequest,
+    ChatResponse,
+    ChatMessage,
 )
 from app.config import settings
 
@@ -435,6 +438,85 @@ async def explain_commit(repo_url: str, commit_sha: str):
     except Exception as e:
         logger.error(f"Failed to explain commit: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to explain commit: {str(e)}")
+
+
+@app.post("/api/repositories/{repo_url:path}/commits/{commit_sha}/chat", response_model=ChatResponse)
+async def chat_about_commit(repo_url: str, commit_sha: str, chat_request: ChatRequest):
+    """Have a conversation about a commit."""
+    try:
+        from services.github_ingestion import GitHubIngestionService
+        from services.commit_analyzer import CommitAnalyzer
+        from models.schemas import ChatMessage
+        
+        github_service = GitHubIngestionService()
+        commit_analyzer = CommitAnalyzer()
+        
+        # Clone the repository temporarily
+        local_path, repo = github_service.clone_repository(repo_url)
+        
+        try:
+            # Get the commit
+            commit = repo.commit(commit_sha)
+            
+            # Get diff
+            diff_text = ""
+            file_list = []
+            
+            if commit.parents:
+                parent = commit.parents[0]
+                diff = parent.diff(commit, create_patch=True)
+                diff_text = '\n'.join([str(d) for d in diff])
+                
+                # Get list of changed files
+                file_list = [item.a_path if item.a_path else item.b_path for item in diff]
+            
+            # Convert conversation history to dict format
+            conversation_history = [
+                {"role": msg.role, "content": msg.content}
+                for msg in chat_request.conversation_history
+            ]
+            
+            # Chat about the commit
+            assistant_response = commit_analyzer.chat_about_commit(
+                commit_sha=commit.hexsha,
+                commit_message=commit.message.strip(),
+                author=str(commit.author),
+                date=datetime.fromtimestamp(commit.committed_date),
+                diff=diff_text,
+                user_message=chat_request.message,
+                conversation_history=conversation_history,
+                file_list=file_list
+            )
+            
+            # Create assistant message
+            assistant_message = ChatMessage(
+                role="assistant",
+                content=assistant_response,
+                timestamp=datetime.now()
+            )
+            
+            # Build full conversation history
+            full_history = list(chat_request.conversation_history)
+            full_history.append(ChatMessage(
+                role="user",
+                content=chat_request.message,
+                timestamp=datetime.now()
+            ))
+            full_history.append(assistant_message)
+            
+            return ChatResponse(
+                commit_sha=commit.hexsha,
+                message=assistant_message,
+                conversation_history=full_history
+            )
+        
+        finally:
+            # Cleanup
+            github_service.cleanup(local_path)
+    
+    except Exception as e:
+        logger.error(f"Failed to chat about commit: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to chat about commit: {str(e)}")
 
 
 if __name__ == "__main__":

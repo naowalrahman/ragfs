@@ -163,3 +163,23 @@ class CommitExplanation(BaseModel):
     business_impact: Optional[str] = None
     generated_at: datetime
 
+
+class ChatMessage(BaseModel):
+    """A message in a commit chat conversation."""
+    role: str  # "user" or "assistant"
+    content: str
+    timestamp: datetime
+
+
+class ChatRequest(BaseModel):
+    """Request to send a message in commit chat."""
+    message: str
+    conversation_history: List[ChatMessage] = Field(default_factory=list)
+
+
+class ChatResponse(BaseModel):
+    """Response from commit chat."""
+    commit_sha: str
+    message: ChatMessage
+    conversation_history: List[ChatMessage]
+
