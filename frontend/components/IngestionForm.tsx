@@ -5,8 +5,6 @@ import {
   Box,
   TextField,
   Button,
-  FormControlLabel,
-  Checkbox,
   Typography,
   Alert,
   CircularProgress,
@@ -19,20 +17,22 @@ import { apiClient } from '@/lib/api';
 import { IngestionStatus } from '@/types';
 
 interface IngestionFormProps {
-  onSuccess?: () => void;
+  onSuccess?: (repoUrl: string, repoName: string) => void;
 }
 
 export default function IngestionForm({ onSuccess }: IngestionFormProps) {
   const [repoUrl, setRepoUrl] = React.useState('');
-  const [includeCommits, setIncludeCommits] = React.useState(true);
-  const [includeIssues, setIncludeIssues] = React.useState(true);
-  const [includePrs, setIncludePrs] = React.useState(true);
-  const [maxCommits, setMaxCommits] = React.useState(100);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [jobId, setJobId] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState<IngestionStatus | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [progress, setProgress] = React.useState<any>(null);
+
+  const extractRepoName = (url: string): string => {
+    // Extract repo name from URL like "https://github.com/owner/repo" -> "owner/repo"
+    const match = url.match(/github\.com\/([^\/]+\/[^\/]+)/);
+    return match ? match[1] : url;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,41 +42,60 @@ export default function IngestionForm({ onSuccess }: IngestionFormProps) {
     try {
       const response = await apiClient.ingestRepository({
         repo_url: repoUrl,
-        include_commits: includeCommits,
-        include_issues: includeIssues,
-        include_prs: includePrs,
-        max_commits: maxCommits,
+        include_commits: true,
+        include_issues: false,
+        include_prs: false,
+        max_commits: 100,
       });
 
       setJobId(response.job_id);
       setStatus(response.status);
       
       // Start polling for status
-      pollStatus(response.job_id);
+      pollStatus(response.job_id, repoUrl);
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || 'Failed to start ingestion');
       setIsSubmitting(false);
     }
   };
 
-  const pollStatus = async (jobId: string) => {
+  const pollStatus = async (jobId: string, repoUrl: string) => {
+    let pollCount = 0;
+    const maxPolls = 150; // 5 minutes max (150 * 2 seconds)
+    
     const interval = setInterval(async () => {
+      pollCount++;
+      
+      if (pollCount > maxPolls) {
+        clearInterval(interval);
+        setError('Ingestion timed out. Please check backend logs.');
+        setIsSubmitting(false);
+        return;
+      }
+      
       try {
         const statusResponse = await apiClient.getIngestionStatus(jobId);
+        console.log('Poll status:', statusResponse.status, statusResponse.progress);
         setStatus(statusResponse.status);
         setProgress(statusResponse.progress);
 
         if (statusResponse.status === IngestionStatus.COMPLETED) {
           clearInterval(interval);
           setIsSubmitting(false);
-          if (onSuccess) onSuccess();
-          // Reset form after 3 seconds
+          
+          const repoName = extractRepoName(repoUrl);
+          console.log('Ingestion completed! Calling onSuccess with:', repoUrl, repoName);
+          
+          if (onSuccess) {
+            onSuccess(repoUrl, repoName);
+          }
+          
+          // Keep success message visible
           setTimeout(() => {
             setJobId(null);
             setStatus(null);
             setProgress(null);
-            setRepoUrl('');
-          }, 3000);
+          }, 5000);
         } else if (statusResponse.status === IngestionStatus.FAILED) {
           clearInterval(interval);
           setIsSubmitting(false);
@@ -84,8 +103,31 @@ export default function IngestionForm({ onSuccess }: IngestionFormProps) {
         }
       } catch (err: any) {
         console.error('Failed to poll status:', err);
-        clearInterval(interval);
-        setIsSubmitting(false);
+        
+        // If job not found (404), it might have completed before server reloaded
+        if (err.response?.status === 404) {
+          clearInterval(interval);
+          setIsSubmitting(false);
+          
+          // Assume success and try to load branches anyway
+          const repoName = extractRepoName(repoUrl);
+          console.log('Job not found (404), assuming completion. Calling onSuccess...');
+          
+          setStatus(IngestionStatus.COMPLETED);
+          if (onSuccess) {
+            onSuccess(repoUrl, repoName);
+          }
+          
+          setTimeout(() => {
+            setJobId(null);
+            setStatus(null);
+            setProgress(null);
+          }, 3000);
+        } else {
+          clearInterval(interval);
+          setIsSubmitting(false);
+          setError(err.response?.data?.detail || err.message || 'Failed to check ingestion status');
+        }
       }
     }, 2000); // Poll every 2 seconds
   };
@@ -101,10 +143,6 @@ export default function IngestionForm({ onSuccess }: IngestionFormProps) {
         return 'Extracting code files...';
       case 'extracting_commits':
         return 'Extracting commit history...';
-      case 'extracting_issues':
-        return 'Extracting issues...';
-      case 'extracting_prs':
-        return 'Extracting pull requests...';
       case 'processing_documents':
         return 'Processing documents...';
       case 'uploading_to_s3':
@@ -126,7 +164,7 @@ export default function IngestionForm({ onSuccess }: IngestionFormProps) {
         Ingest GitHub Repository
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Add a GitHub repository to the knowledge base. We'll extract and index code, commits, issues, and pull requests.
+        Add a GitHub repository to analyze commits with AI-powered explanations.
       </Typography>
 
       <Box component="form" onSubmit={handleSubmit}>
@@ -138,52 +176,8 @@ export default function IngestionForm({ onSuccess }: IngestionFormProps) {
           onChange={(e) => setRepoUrl(e.target.value)}
           required
           disabled={isSubmitting}
-          sx={{ mb: 2 }}
+          sx={{ mb: 3 }}
         />
-
-        <TextField
-          fullWidth
-          type="number"
-          label="Maximum Commits"
-          value={maxCommits}
-          onChange={(e) => setMaxCommits(parseInt(e.target.value))}
-          disabled={isSubmitting}
-          inputProps={{ min: 1, max: 1000 }}
-          sx={{ mb: 2 }}
-        />
-
-        <Box sx={{ mb: 3 }}>
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={includeCommits}
-                onChange={(e) => setIncludeCommits(e.target.checked)}
-                disabled={isSubmitting}
-              />
-            }
-            label="Include commit history"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={includeIssues}
-                onChange={(e) => setIncludeIssues(e.target.checked)}
-                disabled={isSubmitting}
-              />
-            }
-            label="Include issues"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={includePrs}
-                onChange={(e) => setIncludePrs(e.target.checked)}
-                disabled={isSubmitting}
-              />
-            }
-            label="Include pull requests"
-          />
-        </Box>
 
         <Button
           type="submit"
@@ -193,7 +187,7 @@ export default function IngestionForm({ onSuccess }: IngestionFormProps) {
           startIcon={isSubmitting ? <CircularProgress size={20} /> : <CloudUpload />}
           fullWidth
         >
-          {isSubmitting ? 'Ingesting...' : 'Start Ingestion'}
+          {isSubmitting ? 'Ingesting Repository...' : 'Ingest Repository'}
         </Button>
 
         {/* Status Display */}
@@ -211,7 +205,7 @@ export default function IngestionForm({ onSuccess }: IngestionFormProps) {
               sx={{ mt: 2 }}
             >
               {status === IngestionStatus.COMPLETED
-                ? 'Repository ingested successfully!'
+                ? 'Repository ingested successfully! Loading branches...'
                 : getProgressMessage()}
             </Alert>
           </Box>

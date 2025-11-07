@@ -14,10 +14,10 @@ import {
 } from '@mui/material';
 import IngestionForm from '@/components/IngestionForm';
 import ChatView from '@/components/ChatView';
-import RepositoryList from '@/components/RepositoryList';
 import BranchSelector from '@/components/BranchSelector';
 import CommitList from '@/components/CommitList';
-import { Repository, Branch, CommitSummary } from '@/types';
+import RepositoryList from '@/components/RepositoryList';
+import { Branch, CommitSummary, Repository } from '@/types';
 import { apiClient } from '@/lib/api';
 
 interface TabPanelProps {
@@ -52,15 +52,14 @@ interface Message {
 }
 
 export default function HomePage() {
-  const [mainTabValue, setMainTabValue] = React.useState(0);
-  const [chatTabValue, setChatTabValue] = React.useState(0);
+  const [tabValue, setTabValue] = React.useState(0);
   
-  // Chat state
+  // Chat state (from main branch)
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [repositories, setRepositories] = React.useState<Repository[]>([]);
   
-  // Commit analysis state
+  // Commit analysis state (from hassam branch)
   const [ingestedRepoUrl, setIngestedRepoUrl] = React.useState<string | null>(null);
   const [ingestedRepoName, setIngestedRepoName] = React.useState<string | null>(null);
   const [branches, setBranches] = React.useState<Branch[]>([]);
@@ -70,29 +69,26 @@ export default function HomePage() {
   const [isLoadingCommits, setIsLoadingCommits] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const handleMainTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setMainTabValue(newValue);
+  const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
   };
 
-  const handleChatTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setChatTabValue(newValue);
-  };
-
-  const loadRepositories = React.useCallback(async () => {
+  // Load repositories for the repositories tab
+  const loadRepositories = async () => {
     try {
       const response = await apiClient.listRepositories();
       setRepositories(response.repositories);
     } catch (error) {
       console.error('Failed to load repositories:', error);
     }
-  }, []);
+  };
 
   React.useEffect(() => {
     loadRepositories();
-  }, [loadRepositories]);
+  }, []);
 
+  // Chat message handler (from main branch)
   const handleSendMessage = async (content: string) => {
-    // Add user message
     const userMessage: Message = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -103,7 +99,6 @@ export default function HomePage() {
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
-    // Create assistant message placeholder
     const assistantMessageId = `assistant-${Date.now()}`;
     const assistantMessage: Message = {
       id: assistantMessageId,
@@ -124,7 +119,6 @@ export default function HomePage() {
         { query: content, max_results: 10 },
         (event) => {
           if (event.type === 'sources') {
-            // Store sources
             sources = event.sources || [];
             setMessages(prev =>
               prev.map(msg =>
@@ -134,7 +128,6 @@ export default function HomePage() {
               )
             );
           } else if (event.type === 'text') {
-            // Append text chunk
             fullText += event.text || '';
             setMessages(prev =>
               prev.map(msg =>
@@ -144,7 +137,6 @@ export default function HomePage() {
               )
             );
           } else if (event.type === 'done') {
-            // Mark as not streaming
             setMessages(prev =>
               prev.map(msg =>
                 msg.id === assistantMessageId
@@ -153,7 +145,6 @@ export default function HomePage() {
               )
             );
           } else if (event.type === 'error') {
-            // Handle error
             console.error('Streaming error:', event.error);
             setMessages(prev =>
               prev.map(msg =>
@@ -187,6 +178,7 @@ export default function HomePage() {
     }
   };
 
+  // Commit analysis handlers (from hassam branch)
   const handleIngestionSuccess = async (repoUrl: string, repoName: string) => {
     console.log('handleIngestionSuccess called with:', { repoUrl, repoName });
     setIngestedRepoUrl(repoUrl);
@@ -194,14 +186,15 @@ export default function HomePage() {
     setError(null);
     setIsLoadingBranches(true);
 
+    // Also refresh repositories list
+    await loadRepositories();
+
     try {
       console.log('Loading branches for:', repoUrl);
-      // Load branches for the ingested repository
       const response = await apiClient.listBranches(repoUrl);
       console.log('Branches loaded:', response.branches.length);
       setBranches(response.branches);
       
-      // Auto-select default branch if available
       const defaultBranch = response.branches.find(b => b.is_default);
       console.log('Default branch:', defaultBranch?.name);
       if (defaultBranch) {
@@ -240,78 +233,47 @@ export default function HomePage() {
       {/* Hero Section */}
       <Box sx={{ mb: 4, textAlign: 'center' }}>
         <Typography variant="h3" component="h1" gutterBottom fontWeight={700}>
-          AI-Powered Code Analysis
+          AI-Powered Code Intelligence Platform
         </Typography>
         <Typography variant="h6" color="text.secondary" sx={{ mb: 2 }}>
-          Chat with your codebase and analyze commits with Claude AI
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Have conversations about your code or analyze specific commits in detail
+          Chat with your codebase and analyze commits with intelligent AI explanations
         </Typography>
       </Box>
 
       {/* Main Tabs */}
       <Paper elevation={0} sx={{ borderRadius: 2, overflow: 'hidden', mb: 4 }}>
         <Tabs
-          value={mainTabValue}
-          onChange={handleMainTabChange}
+          value={tabValue}
+          onChange={handleTabChange}
           aria-label="main tabs"
           sx={{
             borderBottom: 1,
             borderColor: 'divider',
           }}
         >
-          <Tab label="Chat with Codebase" id="main-tab-0" aria-controls="main-tabpanel-0" />
-          <Tab label="Commit Analysis" id="main-tab-1" aria-controls="main-tabpanel-1" />
+          <Tab label="AI Chat" id="tab-0" aria-controls="tabpanel-0" />
+          <Tab label="Commit Analysis" id="tab-1" aria-controls="tabpanel-1" />
+          <Tab label="Ingest Repository" id="tab-2" aria-controls="tabpanel-2" />
+          <Tab label="Repositories" id="tab-3" aria-controls="tabpanel-3" />
         </Tabs>
 
-        {/* Chat Tab */}
-        <TabPanel value={mainTabValue} index={0}>
-          <Box sx={{ mb: 4 }}>
-            <ChatView
-              onSendMessage={handleSendMessage}
-              messages={messages}
-              isLoading={isLoading}
-            />
-          </Box>
-
-          {/* Chat Sub-tabs */}
-          <Paper elevation={1} sx={{ borderRadius: 2, overflow: 'hidden' }}>
-            <Tabs
-              value={chatTabValue}
-              onChange={handleChatTabChange}
-              aria-label="chat tabs"
-              sx={{
-                borderBottom: 1,
-                borderColor: 'divider',
-              }}
-            >
-              <Tab label="Ingest Repository" id="chat-tab-0" aria-controls="chat-tabpanel-0" />
-              <Tab label="Repositories" id="chat-tab-1" aria-controls="chat-tabpanel-1" />
-            </Tabs>
-
-            <TabPanel value={chatTabValue} index={0}>
-              <IngestionForm onSuccess={loadRepositories} />
-            </TabPanel>
-
-            <TabPanel value={chatTabValue} index={1}>
-              <RepositoryList repositories={repositories} onRefresh={loadRepositories} />
-            </TabPanel>
-          </Paper>
+        {/* Tab 0: AI Chat */}
+        <TabPanel value={tabValue} index={0}>
+          <ChatView
+            onSendMessage={handleSendMessage}
+            messages={messages}
+            isLoading={isLoading}
+          />
         </TabPanel>
 
-        {/* Commit Analysis Tab */}
-        <TabPanel value={mainTabValue} index={1}>
-          {/* Ingestion Form */}
-          <Paper elevation={2} sx={{ p: 4, mb: 4 }}>
-            <IngestionForm onSuccess={handleIngestionSuccess} />
-          </Paper>
-
-          {/* Commit Analysis Section - Shows after successful ingestion */}
-          {ingestedRepoUrl && (
+        {/* Tab 1: Commit Analysis */}
+        <TabPanel value={tabValue} index={1}>
+          {!ingestedRepoUrl ? (
+            <Alert severity="info" sx={{ mb: 3 }}>
+              Please ingest a repository first (go to "Ingest Repository" tab) to analyze commits.
+            </Alert>
+          ) : (
             <>
-              <Divider sx={{ my: 4 }} />
-              
               <Box sx={{ mb: 4 }}>
                 <Typography variant="h5" gutterBottom fontWeight={600}>
                   Analyze Commits
@@ -367,8 +329,17 @@ export default function HomePage() {
             </>
           )}
         </TabPanel>
+
+        {/* Tab 2: Ingest Repository */}
+        <TabPanel value={tabValue} index={2}>
+          <IngestionForm onSuccess={handleIngestionSuccess} />
+        </TabPanel>
+
+        {/* Tab 3: Repositories */}
+        <TabPanel value={tabValue} index={3}>
+          <RepositoryList repositories={repositories} onRefresh={loadRepositories} />
+        </TabPanel>
       </Paper>
     </Box>
   );
 }
-

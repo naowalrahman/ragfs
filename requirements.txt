@@ -20,5 +20,5 @@ httpx==0.25.2
 
 # Code parsing
 tree-sitter==0.20.4
-tree-sitter-python==0.20.4
+tree-sitter-python==0.25.0
 

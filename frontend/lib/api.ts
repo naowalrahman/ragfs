@@ -9,6 +9,12 @@ import {
   QueryResponse,
   RepositoryListResponse,
   HealthResponse,
+  BranchListResponse,
+  CommitListResponse,
+  CommitDetail,
+  CommitExplanation,
+  ChatRequest,
+  ChatResponse,
 } from '@/types';
 
 class ApiClient {
@@ -40,7 +46,7 @@ class ApiClient {
 
   // Get ingestion status
   async getIngestionStatus(jobId: string): Promise<IngestionStatusResponse> {
-    const response = await this.client.get<IngestionStatusResponse>(`/api/ingest/status/${jobId}`);
+    const response = await this.client.get<IngestionStatusResponse>(`/api/ingest/${jobId}/status`);
     return response.data;
   }
 
@@ -119,6 +125,46 @@ class ApiClient {
   // List repositories
   async listRepositories(): Promise<RepositoryListResponse> {
     const response = await this.client.get<RepositoryListResponse>('/api/repositories');
+    return response.data;
+  }
+
+  // List branches for a repository
+  async listBranches(repoUrl: string): Promise<BranchListResponse> {
+    const response = await this.client.get<BranchListResponse>(`/api/repositories/${encodeURIComponent(repoUrl)}/branches`);
+    return response.data;
+  }
+
+  // List commits for a branch
+  async listCommits(repoUrl: string, branch: string, limit: number = 50): Promise<CommitListResponse> {
+    const response = await this.client.get<CommitListResponse>(
+      `/api/repositories/${encodeURIComponent(repoUrl)}/branches/${encodeURIComponent(branch)}/commits`,
+      { params: { limit } }
+    );
+    return response.data;
+  }
+
+  // Get commit details
+  async getCommitDetail(repoUrl: string, commitSha: string): Promise<CommitDetail> {
+    const response = await this.client.get<CommitDetail>(
+      `/api/repositories/${encodeURIComponent(repoUrl)}/commits/${commitSha}`
+    );
+    return response.data;
+  }
+
+  // Get commit explanation from LLM
+  async explainCommit(repoUrl: string, commitSha: string): Promise<CommitExplanation> {
+    const response = await this.client.get<CommitExplanation>(
+      `/api/repositories/${encodeURIComponent(repoUrl)}/commits/${commitSha}/explain`
+    );
+    return response.data;
+  }
+
+  // Chat about a commit
+  async chatAboutCommit(repoUrl: string, commitSha: string, chatRequest: ChatRequest): Promise<ChatResponse> {
+    const response = await this.client.post<ChatResponse>(
+      `/api/repositories/${encodeURIComponent(repoUrl)}/commits/${commitSha}/chat`,
+      chatRequest
+    );
     return response.data;
   }
 }

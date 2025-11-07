@@ -3,7 +3,7 @@ Ingestion orchestrator that coordinates the entire ingestion pipeline.
 """
 import logging
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from models.schemas import IngestionRequest, IngestionStatus, IngestionStatusResponse
 from services.github_ingestion import GitHubIngestionService
@@ -13,7 +13,7 @@ from services.bedrock_service import BedrockService
 logger = logging.getLogger(__name__)
 
 
-async def run_ingestion(
+def run_ingestion(
     job_id: str,
     request: IngestionRequest,
     jobs_dict: Dict[str, IngestionStatusResponse],
@@ -153,7 +153,7 @@ async def run_ingestion(
         
         # Update job status to completed
         jobs_dict[job_id].status = IngestionStatus.COMPLETED
-        jobs_dict[job_id].completed_at = datetime.utcnow()
+        jobs_dict[job_id].completed_at = datetime.now(timezone.utc)
         jobs_dict[job_id].documents_processed = len(all_documents)
         jobs_dict[job_id].progress = {
             "stage": "completed",
@@ -169,7 +169,7 @@ async def run_ingestion(
         repos_dict[request.repo_url] = {
             "repo_url": request.repo_url,
             "repo_name": full_repo_name,
-            "ingested_at": datetime.utcnow(),
+            "ingested_at": datetime.now(timezone.utc),
             "document_count": len(all_documents),
             "last_commit_sha": last_commit_sha
         }
@@ -181,7 +181,7 @@ async def run_ingestion(
         
         # Update job status to failed
         jobs_dict[job_id].status = IngestionStatus.FAILED
-        jobs_dict[job_id].completed_at = datetime.utcnow()
+        jobs_dict[job_id].completed_at = datetime.now(timezone.utc)
         jobs_dict[job_id].error_message = str(e)
         jobs_dict[job_id].progress = {"stage": "failed", "error": str(e)}
         

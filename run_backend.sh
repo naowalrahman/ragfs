@@ -35,5 +35,6 @@ echo "✅ Starting FastAPI server..."
 echo "📍 API will be available at: http://localhost:8000"
 echo "📚 API docs will be available at: http://localhost:8000/docs"
 echo ""
-python -m uvicorn app.main:app --reload
+echo "⚠️  Running without auto-reload to prevent restart loops during repository cloning"
+python -m uvicorn app.main:app
 
