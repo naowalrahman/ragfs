@@ -291,12 +291,29 @@ class BedrockService:
                         logger.warning(f"Content contains invalid UTF-8 characters, cleaning...")
                         content = content.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
                 
+                metadata = item.get('metadata', {})
+                
+                # Try to infer document_type from metadata if not explicitly set
+                doc_type = metadata.get('document_type', '')
+                if not doc_type:
+                    # Infer from available metadata fields
+                    if 'file_path' in metadata and 'start_line' in metadata:
+                        doc_type = 'code'
+                    elif 'commit_sha' in metadata:
+                        doc_type = 'commit'
+                    elif 'issue_number' in metadata:
+                        doc_type = 'issue'
+                    elif 'pr_number' in metadata:
+                        doc_type = 'pull_request'
+                    else:
+                        doc_type = 'code'  # Default to code if we can't determine
+                
                 result = SearchResult(
                     content=content,
                     score=item.get('score', 0.0),
-                    metadata=item.get('metadata', {}),
-                    document_type=item.get('metadata', {}).get('document_type', 'unknown'),
-                    source_location=self._format_source_location(item.get('metadata', {}))
+                    metadata=metadata,
+                    document_type=doc_type,
+                    source_location=self._format_source_location(metadata)
                 )
                 results.append(result)
             
@@ -309,7 +326,7 @@ class BedrockService:
     
     def invoke_claude(self, query: str, context_documents: List[SearchResult]) -> str:
         """
-        Invoke Claude with retrieved context to generate an answer.
+        Invoke Claude with retrieved context to generate an answer (non-streaming).
         
         Args:
             query: User's question
@@ -374,6 +391,84 @@ Please provide a clear, concise, and helpful answer:"""
             logger.error(f"Claude invocation failed: {str(e)}")
             logger.error(f"Model ID: {self.model_id}")
             raise
+
+    def invoke_claude_stream(self, query: str, context_documents: List[SearchResult]):
+        """
+        Invoke Claude with streaming response for real-time conversation.
+        
+        Args:
+            query: User's question
+            context_documents: Retrieved documents from knowledge base
+            
+        Yields:
+            Chunks of generated text from Claude
+        """
+        try:
+            # Build context from retrieved documents
+            context_parts = []
+            for i, doc in enumerate(context_documents, 1):
+                context_parts.append(
+                    f"<document index=\"{i}\">\n"
+                    f"<source>{doc.source_location or 'Unknown source'}</source>\n"
+                    f"<document_type>{doc.document_type}</document_type>\n"
+                    f"<content>\n{doc.content}\n</content>\n"
+                    f"</document>"
+                )
+            
+            context_str = "\n\n".join(context_parts)
+            
+            # Construct prompt for Claude
+            prompt = f"""You are an AI assistant helping developers understand their codebase. You have been provided with relevant documents from a code repository knowledge base.
+
+Here are the relevant documents:
+
+{context_str}
+
+Based on the above documents, please answer the following question. If the documents don't contain enough information to answer the question, say so clearly. Always cite which document(s) you're referencing in your answer.
+
+Question: {query}
+
+Please provide a clear, concise, and helpful answer:"""
+
+            # Invoke Claude via Bedrock with streaming
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4000,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.7
+            }
+            
+            response = self.bedrock_runtime_client.invoke_model_with_response_stream(
+                modelId=self.model_id,
+                body=json.dumps(request_body)
+            )
+            
+            # Stream the response
+            stream = response.get('body')
+            if stream:
+                for event in stream:
+                    chunk = event.get('chunk')
+                    if chunk:
+                        chunk_obj = json.loads(chunk.get('bytes').decode())
+                        
+                        if chunk_obj['type'] == 'content_block_delta':
+                            if chunk_obj['delta']['type'] == 'text_delta':
+                                text = chunk_obj['delta']['text']
+                                yield text
+                        elif chunk_obj['type'] == 'message_stop':
+                            break
+            
+            logger.info("Streaming response completed")
+            
+        except Exception as e:
+            logger.error(f"Claude streaming invocation failed: {str(e)}")
+            logger.error(f"Model ID: {self.model_id}")
+            raise
     
     async def query(
         self,
@@ -383,7 +478,7 @@ Please provide a clear, concise, and helpful answer:"""
         repo_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        RAG query: Retrieve documents and generate answer using Claude.
+        RAG query: Retrieve documents and generate answer using Claude (non-streaming).
         
         Args:
             query: User's question
@@ -420,8 +515,72 @@ Please provide a clear, concise, and helpful answer:"""
         except Exception as e:
             logger.error(f"RAG query failed: {str(e)}")
             raise
+
+    async def query_stream(
+        self,
+        query: str,
+        max_results: int = 10,
+        filter_type: Optional[DocumentType] = None,
+        repo_url: Optional[str] = None
+    ):
+        """
+        RAG query with streaming: Retrieve documents and stream Claude's response.
+        
+        Args:
+            query: User's question
+            max_results: Maximum number of source documents to retrieve
+            filter_type: Optional filter by document type
+            repo_url: Optional filter by repository URL
+            
+        Yields:
+            Dictionary events for streaming (sources first, then text chunks)
+        """
+        try:
+            # Step 1: Retrieve relevant documents
+            logger.info(f"Retrieving documents for query: {query}")
+            sources = await self.retrieve_documents(
+                query=query,
+                max_results=max_results,
+                filter_type=filter_type,
+                repo_url=repo_url
+            )
+            
+            # First, send the sources as a separate event
+            yield {
+                'type': 'sources',
+                'sources': [source.model_dump() for source in sources],
+                'total_sources': len(sources)
+            }
+            
+            # Step 2: Stream answer using Claude
+            if sources:
+                logger.info(f"Streaming answer with {len(sources)} source documents")
+                for text_chunk in self.invoke_claude_stream(query, sources):
+                    yield {
+                        'type': 'text',
+                        'text': text_chunk
+                    }
+            else:
+                logger.warning("No documents found for query")
+                yield {
+                    'type': 'text',
+                    'text': "I couldn't find any relevant information in the knowledge base to answer your question. Please try rephrasing your query or ensure the relevant repositories have been ingested."
+                }
+            
+            # Send completion event
+            yield {
+                'type': 'done'
+            }
+            
+        except Exception as e:
+            logger.error(f"RAG streaming query failed: {str(e)}")
+            yield {
+                'type': 'error',
+                'error': str(e)
+            }
+            raise
     
-    def _format_source_location(self, metadata: Dict[str, Any]) -> Optional[str]:
+    def _format_source_location(self, metadata: Dict[str, Any]) -> str:
         """
         Format a human-readable source location from metadata.
         
@@ -433,32 +592,51 @@ Please provide a clear, concise, and helpful answer:"""
         """
         doc_type = metadata.get('document_type', '')
         
-        if doc_type == DocumentType.CODE:
-            file_path = metadata.get('file_path', 'unknown')
-            start_line = metadata.get('start_line', '')
-            end_line = metadata.get('end_line', '')
-            return f"{file_path}:{start_line}-{end_line}"
+        if doc_type == DocumentType.CODE or doc_type == 'code':
+            file_path = metadata.get('file_path', '')
+            if file_path:
+                start_line = metadata.get('start_line', '')
+                end_line = metadata.get('end_line', '')
+                if start_line and end_line:
+                    return f"{file_path}:{start_line}-{end_line}"
+                return file_path
+            
+        elif doc_type == DocumentType.COMMIT or doc_type == 'commit':
+            commit_sha = metadata.get('commit_sha', '')
+            if commit_sha:
+                return f"Commit {commit_sha[:8]}"
         
-        elif doc_type == DocumentType.COMMIT:
-            commit_sha = metadata.get('commit_sha', 'unknown')
-            return f"Commit {commit_sha[:8]}"
+        elif doc_type == DocumentType.ISSUE or doc_type == 'issue':
+            issue_number = metadata.get('issue_number', '')
+            if issue_number:
+                return f"Issue #{issue_number}"
         
-        elif doc_type == DocumentType.ISSUE:
-            issue_number = metadata.get('issue_number', 'unknown')
-            return f"Issue #{issue_number}"
+        elif doc_type == DocumentType.PULL_REQUEST or doc_type == 'pull_request':
+            pr_number = metadata.get('pr_number', '')
+            if pr_number:
+                return f"Pull Request #{pr_number}"
         
-        elif doc_type == DocumentType.PULL_REQUEST:
-            pr_number = metadata.get('pr_number', 'unknown')
-            return f"Pull Request #{pr_number}"
+        # Fallback: try to construct something meaningful from available metadata
+        if 'file_path' in metadata:
+            return metadata['file_path']
+        elif 'commit_sha' in metadata:
+            return f"Commit {metadata['commit_sha'][:8]}"
+        elif 'issue_number' in metadata:
+            return f"Issue #{metadata['issue_number']}"
+        elif 'pr_number' in metadata:
+            return f"PR #{metadata['pr_number']}"
+        elif 'repo_name' in metadata:
+            return metadata['repo_name']
         
-        return None
+        # Last resort: return a generic label
+        return "Document"
     
     def list_documents_in_s3(self, repo_name: str) -> List[str]:
         """
         List all documents in S3 for a given repository.
         
         Args:
-            repo_name: Repository name
+            repo_name: Repository name or full path (username/repo_name)
             
         Returns:
             List of S3 object keys
@@ -485,7 +663,7 @@ Please provide a clear, concise, and helpful answer:"""
         Delete all documents for a repository from S3.
         
         Args:
-            repo_name: Repository name
+            repo_name: Repository name or full path (username/repo_name)
             
         Returns:
             True if successful, False otherwise
@@ -513,4 +691,156 @@ Please provide a clear, concise, and helpful answer:"""
         except Exception as e:
             logger.error(f"Failed to delete documents: {str(e)}")
             return False
+    
+    def list_ingested_repositories(self) -> List[Dict[str, Any]]:
+        """
+        List all ingested repositories by scanning S3 bucket.
+        S3 structure: repositories/{username}/{repo_name}/documents/{doc_id}.json
+        
+        Returns:
+            List of repository information dictionaries
+        """
+        try:
+            prefix = "repositories/"
+            
+            logger.info(f"Scanning S3 bucket '{self.s3_bucket_name}' with prefix '{prefix}'")
+            
+            # Step 1: Get all usernames (first level)
+            paginator = self.s3_client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(
+                Bucket=self.s3_bucket_name,
+                Prefix=prefix,
+                Delimiter='/'
+            )
+            
+            usernames = set()
+            for page in pages:
+                if 'CommonPrefixes' in page:
+                    for common_prefix in page['CommonPrefixes']:
+                        username_path = common_prefix['Prefix']
+                        username = username_path.replace(prefix, '').rstrip('/')
+                        if username:
+                            usernames.add(username)
+                            logger.info(f"Found username folder: {username}")
+            
+            logger.info(f"Found {len(usernames)} usernames: {usernames}")
+            
+            # Step 2: For each username, get all repositories
+            repositories = []
+            repo_full_paths_seen = set()
+            
+            for username in usernames:
+                username_prefix = f"{prefix}{username}/"
+                logger.info(f"Scanning repositories for user: {username}")
+                
+                user_paginator = self.s3_client.get_paginator('list_objects_v2')
+                user_pages = user_paginator.paginate(
+                    Bucket=self.s3_bucket_name,
+                    Prefix=username_prefix,
+                    Delimiter='/'
+                )
+                
+                for page in user_pages:
+                    if 'CommonPrefixes' in page:
+                        for common_prefix in page['CommonPrefixes']:
+                            repo_path = common_prefix['Prefix']
+                            repo_name = repo_path.replace(username_prefix, '').rstrip('/')
+                            if repo_name:
+                                full_path = f"{username}/{repo_name}"
+                                if full_path not in repo_full_paths_seen:
+                                    repo_full_paths_seen.add(full_path)
+                                    logger.info(f"Found repository: {username}/{repo_name}")
+            
+            logger.info(f"Found {len(repo_full_paths_seen)} repositories total")
+            
+            # Step 3: For each repository, get document count and last modified time
+            for full_path in repo_full_paths_seen:
+                repo_prefix = f"{prefix}{full_path}/documents/"
+                username, repo_name = full_path.split('/', 1)
+                
+                try:
+                    # List all documents for this repository
+                    doc_paginator = self.s3_client.get_paginator('list_objects_v2')
+                    doc_pages = doc_paginator.paginate(
+                        Bucket=self.s3_bucket_name,
+                        Prefix=repo_prefix
+                    )
+                    
+                    document_count = 0
+                    last_modified = None
+                    
+                    for doc_page in doc_pages:
+                        if 'Contents' in doc_page:
+                            for obj in doc_page['Contents']:
+                                document_count += 1
+                                obj_last_modified = obj['LastModified']
+                                if last_modified is None or obj_last_modified > last_modified:
+                                    last_modified = obj_last_modified
+                    
+                    if document_count > 0:  # Only include repos with documents
+                        # Try to extract repo URL from metadata of first document
+                        repo_url = self._extract_repo_url_from_s3(full_path)
+                        
+                        repositories.append({
+                            'repo_name': full_path,  # Use full path as repo_name (username/repo)
+                            'repo_url': repo_url or f"https://github.com/{full_path}",  # Fallback
+                            'document_count': document_count,
+                            'ingested_at': last_modified.isoformat() if last_modified else datetime.now().isoformat(),
+                            'last_commit_sha': None  # Could be extracted from metadata if needed
+                        })
+                        
+                        logger.info(f"Added repository {full_path} with {document_count} documents")
+                        
+                except Exception as e:
+                    logger.error(f"Error processing repository {full_path}: {str(e)}")
+                    continue
+            
+            logger.info(f"Found {len(repositories)} ingested repositories in S3")
+            return repositories
+            
+        except Exception as e:
+            logger.error(f"Failed to list ingested repositories: {str(e)}", exc_info=True)
+            return []
+    
+    def _extract_repo_url_from_s3(self, repo_full_path: str) -> Optional[str]:
+        """
+        Extract repository URL from metadata of first document in S3.
+        
+        Args:
+            repo_full_path: Full repository path (username/repo_name)
+            
+        Returns:
+            Repository URL if found, None otherwise
+        """
+        try:
+            prefix = f"repositories/{repo_full_path}/documents/"
+            
+            # Get first document
+            response = self.s3_client.list_objects_v2(
+                Bucket=self.s3_bucket_name,
+                Prefix=prefix,
+                MaxKeys=1
+            )
+            
+            if 'Contents' in response and len(response['Contents']) > 0:
+                first_key = response['Contents'][0]['Key']
+                
+                # Get the object
+                obj_response = self.s3_client.get_object(
+                    Bucket=self.s3_bucket_name,
+                    Key=first_key
+                )
+                
+                # Parse JSON content
+                content = json.loads(obj_response['Body'].read())
+                
+                # Extract repo_url from metadata
+                if 'metadata' in content and 'repo_url' in content['metadata']:
+                    return content['metadata']['repo_url']
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Could not extract repo URL for {repo_full_path}: {str(e)}")
+            return None
 

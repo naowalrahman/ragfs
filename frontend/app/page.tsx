@@ -3,17 +3,15 @@
 import * as React from 'react';
 import {
   Box,
-  Grid,
   Typography,
   Tab,
   Tabs,
   Paper,
 } from '@mui/material';
 import IngestionForm from '@/components/IngestionForm';
-import SearchBar from '@/components/SearchBar';
-import ResultsView from '@/components/ResultsView';
+import ChatView from '@/components/ChatView';
 import RepositoryList from '@/components/RepositoryList';
-import { QueryResponse, Repository } from '@/types';
+import { Repository } from '@/types';
 import { apiClient } from '@/lib/api';
 
 interface TabPanelProps {
@@ -38,26 +36,118 @@ function TabPanel(props: TabPanelProps) {
   );
 }
 
+interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sources?: any[];
+  timestamp: Date;
+  isStreaming?: boolean;
+}
+
 export default function HomePage() {
   const [tabValue, setTabValue] = React.useState(0);
-  const [searchResults, setSearchResults] = React.useState<QueryResponse | null>(null);
-  const [isSearching, setIsSearching] = React.useState(false);
+  const [messages, setMessages] = React.useState<Message[]>([]);
+  const [isLoading, setIsLoading] = React.useState(false);
   const [repositories, setRepositories] = React.useState<Repository[]>([]);
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
   };
 
-  const handleSearch = async (query: string) => {
-    setIsSearching(true);
+  const handleSendMessage = async (content: string) => {
+    // Add user message
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content,
+      timestamp: new Date(),
+    };
+    
+    setMessages(prev => [...prev, userMessage]);
+    setIsLoading(true);
+
+    // Create assistant message placeholder
+    const assistantMessageId = `assistant-${Date.now()}`;
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      sources: [],
+      timestamp: new Date(),
+      isStreaming: true,
+    };
+    
+    setMessages(prev => [...prev, assistantMessage]);
+
     try {
-      const results = await apiClient.query({ query, max_results: 10 });
-      setSearchResults(results);
+      let sources: any[] = [];
+      let fullText = '';
+
+      await apiClient.queryStream(
+        { query: content, max_results: 10 },
+        (event) => {
+          if (event.type === 'sources') {
+            // Store sources
+            sources = event.sources || [];
+            setMessages(prev =>
+              prev.map(msg =>
+                msg.id === assistantMessageId
+                  ? { ...msg, sources }
+                  : msg
+              )
+            );
+          } else if (event.type === 'text') {
+            // Append text chunk
+            fullText += event.text || '';
+            setMessages(prev =>
+              prev.map(msg =>
+                msg.id === assistantMessageId
+                  ? { ...msg, content: fullText }
+                  : msg
+              )
+            );
+          } else if (event.type === 'done') {
+            // Mark as not streaming
+            setMessages(prev =>
+              prev.map(msg =>
+                msg.id === assistantMessageId
+                  ? { ...msg, isStreaming: false }
+                  : msg
+              )
+            );
+          } else if (event.type === 'error') {
+            // Handle error
+            console.error('Streaming error:', event.error);
+            setMessages(prev =>
+              prev.map(msg =>
+                msg.id === assistantMessageId
+                  ? {
+                      ...msg,
+                      content: `Error: ${event.error}`,
+                      isStreaming: false,
+                    }
+                  : msg
+              )
+            );
+          }
+        }
+      );
     } catch (error) {
-      console.error('Search failed:', error);
-      // TODO: Show error notification
+      console.error('Failed to send message:', error);
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === assistantMessageId
+            ? {
+                ...msg,
+                content: 'Sorry, I encountered an error processing your request.',
+                isStreaming: false,
+              }
+            : msg
+        )
+      );
     } finally {
-      setIsSearching(false);
+      setIsLoading(false);
     }
   };
 
@@ -77,24 +167,23 @@ export default function HomePage() {
   return (
     <Box>
       {/* Hero Section */}
-      <Box sx={{ mb: 6, textAlign: 'center' }}>
+      <Box sx={{ mb: 4, textAlign: 'center' }}>
         <Typography variant="h3" component="h1" gutterBottom fontWeight={700}>
-          AI-Powered Knowledge Search
+          AI Chat with Your Codebase
         </Typography>
-        <Typography variant="h6" color="text.secondary" sx={{ mb: 4 }}>
-          Search across your entire software ecosystem - code, commits, issues, and PRs
+        <Typography variant="h6" color="text.secondary" sx={{ mb: 2 }}>
+          Have a conversation with AI about your code, commits, issues, and PRs
         </Typography>
-
-        {/* Search Bar */}
-        <SearchBar onSearch={handleSearch} isLoading={isSearching} />
       </Box>
 
-      {/* Search Results */}
-      {searchResults && (
-        <Box sx={{ mb: 4 }}>
-          <ResultsView results={searchResults} />
-        </Box>
-      )}
+      {/* Chat Interface */}
+      <Box sx={{ mb: 4 }}>
+        <ChatView
+          onSendMessage={handleSendMessage}
+          messages={messages}
+          isLoading={isLoading}
+        />
+      </Box>
 
       {/* Tabs */}
       <Paper elevation={0} sx={{ borderRadius: 2, overflow: 'hidden' }}>

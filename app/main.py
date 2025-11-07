@@ -2,11 +2,13 @@
 FastAPI application for RAG Knowledge Platform.
 """
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 from typing import Dict
 import logging
 import uuid
+import json
 
 from models.schemas import (
     IngestionRequest,
@@ -145,7 +147,7 @@ async def get_ingestion_status(job_id: str):
 @app.post("/api/query", response_model=QueryResponse)
 async def query_knowledge_base(request: QueryRequest):
     """
-    Query the knowledge base using RAG (Retrieval-Augmented Generation).
+    Query the knowledge base using RAG (Retrieval-Augmented Generation) - Non-streaming.
     
     Retrieves relevant documents from ingested repositories and uses Claude Sonnet 4
     to generate a comprehensive answer based on the retrieved context.
@@ -173,26 +175,83 @@ async def query_knowledge_base(request: QueryRequest):
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
 
 
+@app.post("/api/query/stream")
+async def query_knowledge_base_stream(request: QueryRequest):
+    """
+    Query the knowledge base with streaming RAG response.
+    
+    Returns Server-Sent Events (SSE) stream with:
+    1. Source documents
+    2. Streaming text chunks from Claude
+    3. Completion event
+    """
+    async def event_generator():
+        try:
+            from services.bedrock_service import BedrockService
+            
+            bedrock_service = BedrockService()
+            
+            # Stream the query results
+            async for event in bedrock_service.query_stream(
+                query=request.query,
+                max_results=request.max_results,
+                filter_type=request.filter_type,
+                repo_url=request.repo_url
+            ):
+                # Send event as JSON
+                yield f"data: {json.dumps(event)}\n\n"
+                
+        except Exception as e:
+            logger.error(f"Streaming query failed: {str(e)}")
+            error_event = {
+                'type': 'error',
+                'error': str(e)
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable buffering in nginx
+        }
+    )
+
+
 @app.get("/api/repositories", response_model=RepositoryListResponse)
 async def list_repositories():
-    """List all ingested repositories."""
-    from models.schemas import Repository
-    
-    repos = [
-        Repository(
-            repo_url=repo_data["repo_url"],
-            repo_name=repo_data["repo_name"],
-            ingested_at=repo_data["ingested_at"],
-            document_count=repo_data["document_count"],
-            last_commit_sha=repo_data.get("last_commit_sha")
+    """List all ingested repositories from S3 bucket."""
+    try:
+        from models.schemas import Repository
+        from services.bedrock_service import BedrockService
+        
+        # Fetch repositories from S3 bucket
+        bedrock_service = BedrockService()
+        repo_data_list = bedrock_service.list_ingested_repositories()
+        
+        logger.info(f"Found {len(repo_data_list)} repositories in S3")
+        
+        repos = [
+            Repository(
+                repo_url=repo_data["repo_url"],
+                repo_name=repo_data["repo_name"],
+                ingested_at=repo_data["ingested_at"],
+                document_count=repo_data["document_count"],
+                last_commit_sha=repo_data.get("last_commit_sha")
+            )
+            for repo_data in repo_data_list
+        ]
+        
+        return RepositoryListResponse(
+            repositories=repos,
+            total=len(repos)
         )
-        for repo_data in ingested_repositories.values()
-    ]
-    
-    return RepositoryListResponse(
-        repositories=repos,
-        total=len(repos)
-    )
+        
+    except Exception as e:
+        logger.error(f"Failed to list repositories: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list repositories: {str(e)}")
 
 
 if __name__ == "__main__":
