@@ -53,29 +53,29 @@ interface Message {
 
 export default function HomePage() {
   const [mainTabValue, setMainTabValue] = React.useState(0);
-  const [chatTabValue, setChatTabValue] = React.useState(0);
+  const [repositoryTabValue, setRepositoryTabValue] = React.useState(0);
   
-  // Chat state
-  const [messages, setMessages] = React.useState<Message[]>([]);
-  const [isLoading, setIsLoading] = React.useState(false);
+  // Shared repository state
+  const [currentRepoUrl, setCurrentRepoUrl] = React.useState<string | null>(null);
+  const [currentRepoName, setCurrentRepoName] = React.useState<string | null>(null);
   const [repositories, setRepositories] = React.useState<Repository[]>([]);
-  
-  // Commit analysis state
-  const [ingestedRepoUrl, setIngestedRepoUrl] = React.useState<string | null>(null);
-  const [ingestedRepoName, setIngestedRepoName] = React.useState<string | null>(null);
   const [branches, setBranches] = React.useState<Branch[]>([]);
   const [selectedBranch, setSelectedBranch] = React.useState<string | null>(null);
   const [commits, setCommits] = React.useState<CommitSummary[]>([]);
   const [isLoadingBranches, setIsLoadingBranches] = React.useState(false);
   const [isLoadingCommits, setIsLoadingCommits] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  
+  // Chat state
+  const [messages, setMessages] = React.useState<Message[]>([]);
+  const [isLoading, setIsLoading] = React.useState(false);
 
   const handleMainTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setMainTabValue(newValue);
   };
 
-  const handleChatTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setChatTabValue(newValue);
+  const handleRepositoryTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setRepositoryTabValue(newValue);
   };
 
   const loadRepositories = React.useCallback(async () => {
@@ -189,10 +189,13 @@ export default function HomePage() {
 
   const handleIngestionSuccess = async (repoUrl: string, repoName: string) => {
     console.log('handleIngestionSuccess called with:', { repoUrl, repoName });
-    setIngestedRepoUrl(repoUrl);
-    setIngestedRepoName(repoName);
+    setCurrentRepoUrl(repoUrl);
+    setCurrentRepoName(repoName);
     setError(null);
     setIsLoadingBranches(true);
+
+    // Also refresh the repositories list
+    await loadRepositories();
 
     try {
       console.log('Loading branches for:', repoUrl);
@@ -246,128 +249,163 @@ export default function HomePage() {
           Chat with your codebase and analyze commits with Claude AI
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          Have conversations about your code or analyze specific commits in detail
+          First ingest a repository, then choose your analysis method below
         </Typography>
       </Box>
 
-      {/* Main Tabs */}
-      <Paper elevation={0} sx={{ borderRadius: 2, overflow: 'hidden', mb: 4 }}>
-        <Tabs
-          value={mainTabValue}
-          onChange={handleMainTabChange}
-          aria-label="main tabs"
-          sx={{
-            borderBottom: 1,
-            borderColor: 'divider',
-          }}
-        >
-          <Tab label="Chat with Codebase" id="main-tab-0" aria-controls="main-tabpanel-0" />
-          <Tab label="Commit Analysis" id="main-tab-1" aria-controls="main-tabpanel-1" />
-        </Tabs>
+      {/* Repository Management Section */}
+      <Paper elevation={2} sx={{ p: 4, mb: 4, borderRadius: 2 }}>
+        <Typography variant="h5" gutterBottom fontWeight={600}>
+          Repository Setup
+        </Typography>
+        
+        <Paper elevation={1} sx={{ borderRadius: 2, overflow: 'hidden', mb: 3 }}>
+          <Tabs
+            value={repositoryTabValue}
+            onChange={handleRepositoryTabChange}
+            aria-label="repository tabs"
+            sx={{
+              borderBottom: 1,
+              borderColor: 'divider',
+            }}
+          >
+            <Tab label="Ingest New Repository" id="repo-tab-0" aria-controls="repo-tabpanel-0" />
+            <Tab label="Existing Repositories" id="repo-tab-1" aria-controls="repo-tabpanel-1" />
+          </Tabs>
 
-        {/* Chat Tab */}
-        <TabPanel value={mainTabValue} index={0}>
-          <Box sx={{ mb: 4 }}>
-            <ChatView
-              onSendMessage={handleSendMessage}
-              messages={messages}
-              isLoading={isLoading}
-            />
-          </Box>
-
-          {/* Chat Sub-tabs */}
-          <Paper elevation={1} sx={{ borderRadius: 2, overflow: 'hidden' }}>
-            <Tabs
-              value={chatTabValue}
-              onChange={handleChatTabChange}
-              aria-label="chat tabs"
-              sx={{
-                borderBottom: 1,
-                borderColor: 'divider',
-              }}
-            >
-              <Tab label="Ingest Repository" id="chat-tab-0" aria-controls="chat-tabpanel-0" />
-              <Tab label="Repositories" id="chat-tab-1" aria-controls="chat-tabpanel-1" />
-            </Tabs>
-
-            <TabPanel value={chatTabValue} index={0}>
-              <IngestionForm onSuccess={loadRepositories} />
-            </TabPanel>
-
-            <TabPanel value={chatTabValue} index={1}>
-              <RepositoryList repositories={repositories} onRefresh={loadRepositories} />
-            </TabPanel>
-          </Paper>
-        </TabPanel>
-
-        {/* Commit Analysis Tab */}
-        <TabPanel value={mainTabValue} index={1}>
-          {/* Ingestion Form */}
-          <Paper elevation={2} sx={{ p: 4, mb: 4 }}>
+          <TabPanel value={repositoryTabValue} index={0}>
             <IngestionForm onSuccess={handleIngestionSuccess} />
-          </Paper>
+          </TabPanel>
 
-          {/* Commit Analysis Section - Shows after successful ingestion */}
-          {ingestedRepoUrl && (
-            <>
-              <Divider sx={{ my: 4 }} />
-              
-              <Box sx={{ mb: 4 }}>
-                <Typography variant="h5" gutterBottom fontWeight={600}>
-                  Analyze Commits
-                </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                  Repository: <strong>{ingestedRepoName}</strong>
-                </Typography>
+          <TabPanel value={repositoryTabValue} index={1}>
+            <RepositoryList 
+              repositories={repositories} 
+              onRefresh={loadRepositories}
+              onSelectRepository={(repo) => {
+                setCurrentRepoUrl(repo.repo_url);
+                setCurrentRepoName(repo.repo_name);
+                handleIngestionSuccess(repo.repo_url, repo.repo_name);
+              }}
+            />
+          </TabPanel>
+        </Paper>
 
-                {/* Branch Selector */}
-                {isLoadingBranches && (
-                  <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
-                    <Stack spacing={2} alignItems="center">
-                      <CircularProgress />
-                      <Typography variant="body2" color="text.secondary">
-                        Loading branches...
-                      </Typography>
-                    </Stack>
-                  </Box>
-                )}
-                
-                {!isLoadingBranches && branches.length > 0 && (
-                  <Paper elevation={1} sx={{ p: 3, mb: 3 }}>
-                    <Typography variant="h6" gutterBottom fontWeight={600}>
-                      Select Branch
-                    </Typography>
-                    <BranchSelector
-                      branches={branches}
-                      selectedBranch={selectedBranch}
-                      onSelectBranch={(branch) => handleSelectBranch(ingestedRepoUrl, branch)}
-                      isLoading={isLoadingBranches}
-                    />
-                  </Paper>
-                )}
-
-                {/* Error Display */}
-                {error && (
-                  <Alert severity="error" sx={{ mb: 3 }}>
-                    {error}
-                  </Alert>
-                )}
-
-                {/* Commits List */}
-                {selectedBranch && (
-                  <Paper elevation={1} sx={{ p: 3 }}>
-                    <CommitList
-                      commits={commits}
-                      repoUrl={ingestedRepoUrl}
-                      isLoading={isLoadingCommits}
-                    />
-                  </Paper>
-                )}
-              </Box>
-            </>
-          )}
-        </TabPanel>
+        {/* Current Repository Display */}
+        {currentRepoUrl && (
+          <Alert severity="success" sx={{ mb: 3 }}>
+            <Typography variant="body1" fontWeight={600}>
+              Active Repository: {currentRepoName}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              You can now use either feature below with this repository
+            </Typography>
+          </Alert>
+        )}
       </Paper>
+
+      {/* Feature Tabs - Only show if repository is selected */}
+      {currentRepoUrl && (
+        <Paper elevation={0} sx={{ borderRadius: 2, overflow: 'hidden', mb: 4 }}>
+          <Tabs
+            value={mainTabValue}
+            onChange={handleMainTabChange}
+            aria-label="feature tabs"
+            sx={{
+              borderBottom: 1,
+              borderColor: 'divider',
+            }}
+          >
+            <Tab label="Chat with Codebase" id="main-tab-0" aria-controls="main-tabpanel-0" />
+            <Tab label="Analyze Commits" id="main-tab-1" aria-controls="main-tabpanel-1" />
+          </Tabs>
+
+          {/* Chat Tab */}
+          <TabPanel value={mainTabValue} index={0}>
+            <Box sx={{ p: 3 }}>
+              <Typography variant="h6" gutterBottom fontWeight={600}>
+                Chat with {currentRepoName}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                Ask questions about your codebase, get explanations, and explore your code with AI
+              </Typography>
+              
+              <ChatView
+                onSendMessage={handleSendMessage}
+                messages={messages}
+                isLoading={isLoading}
+              />
+            </Box>
+          </TabPanel>
+
+          {/* Commit Analysis Tab */}
+          <TabPanel value={mainTabValue} index={1}>
+            <Box sx={{ p: 3 }}>
+              <Typography variant="h6" gutterBottom fontWeight={600}>
+                Analyze Commits in {currentRepoName}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                Select a branch and explore commits with detailed AI analysis and conversations
+              </Typography>
+
+              {/* Branch Selector */}
+              {isLoadingBranches && (
+                <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
+                  <Stack spacing={2} alignItems="center">
+                    <CircularProgress />
+                    <Typography variant="body2" color="text.secondary">
+                      Loading branches...
+                    </Typography>
+                  </Stack>
+                </Box>
+              )}
+              
+              {!isLoadingBranches && branches.length > 0 && (
+                <Paper elevation={1} sx={{ p: 3, mb: 3 }}>
+                  <Typography variant="subtitle1" gutterBottom fontWeight={600}>
+                    Select Branch
+                  </Typography>
+                  <BranchSelector
+                    branches={branches}
+                    selectedBranch={selectedBranch}
+                    onSelectBranch={(branch) => handleSelectBranch(currentRepoUrl, branch)}
+                    isLoading={isLoadingBranches}
+                  />
+                </Paper>
+              )}
+
+              {/* Error Display */}
+              {error && (
+                <Alert severity="error" sx={{ mb: 3 }}>
+                  {error}
+                </Alert>
+              )}
+
+              {/* Commits List */}
+              {selectedBranch && (
+                <Paper elevation={1} sx={{ p: 3 }}>
+                  <CommitList
+                    commits={commits}
+                    repoUrl={currentRepoUrl}
+                    isLoading={isLoadingCommits}
+                  />
+                </Paper>
+              )}
+            </Box>
+          </TabPanel>
+        </Paper>
+      )}
+
+      {/* Help Message when no repository is selected */}
+      {!currentRepoUrl && (
+        <Paper elevation={1} sx={{ p: 4, textAlign: 'center', backgroundColor: 'grey.50' }}>
+          <Typography variant="h6" color="text.secondary" gutterBottom>
+            No Repository Selected
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Please ingest a new repository or select an existing one from the Repository Setup section above to get started.
+          </Typography>
+        </Paper>
+      )}
     </Box>
   );
 }
