@@ -247,7 +247,6 @@ export default function IngestionForm({ onSuccess }: IngestionFormProps) {
                 disabled={isSubmitting}
                 size="small"
                 inputProps={{ min: 1, max: 1000 }}
-                helperText="Limit the number of recent commits to process (1-1000)"
                 sx={{ width: 250 }}
               />
             </Box>
