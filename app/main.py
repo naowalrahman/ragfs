@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Dict
 import logging
 import uuid
+import json
+import os
 
 from models.schemas import (
     IngestionRequest,
@@ -40,9 +42,79 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Persistence file for repositories (survives server restarts)
+REPOSITORIES_FILE = "ingested_repositories.json"
+JOB_MAPPING_FILE = "job_id_to_repo_url.json"
+
 # In-memory storage for job status (in production, use a database)
 ingestion_jobs: Dict[str, IngestionStatusResponse] = {}
 ingested_repositories: Dict[str, dict] = {}
+# Map job_id to repo_url for lookup after server restart
+job_id_to_repo_url: Dict[str, str] = {}
+
+
+def load_persisted_data():
+    """Load persisted repositories and job mappings from disk."""
+    global ingested_repositories, job_id_to_repo_url
+    
+    # Load repositories
+    if os.path.exists(REPOSITORIES_FILE):
+        try:
+            with open(REPOSITORIES_FILE, 'r') as f:
+                data = json.load(f)
+                # Convert ingested_at strings back to datetime objects
+                for repo_url, repo_data in data.items():
+                    if "ingested_at" in repo_data and isinstance(repo_data["ingested_at"], str):
+                        try:
+                            iso_string = repo_data["ingested_at"].replace('Z', '+00:00')
+                            repo_data["ingested_at"] = datetime.fromisoformat(iso_string)
+                        except (ValueError, AttributeError) as e:
+                            logger.warning(f"Failed to parse ingested_at for {repo_url}: {e}, using current time")
+                            repo_data["ingested_at"] = datetime.now(timezone.utc)
+                ingested_repositories = data
+                logger.info(f"Loaded {len(ingested_repositories)} repositories from disk")
+        except Exception as e:
+            logger.error(f"Failed to load repositories from disk: {str(e)}")
+    
+    # Load job mappings
+    if os.path.exists(JOB_MAPPING_FILE):
+        try:
+            with open(JOB_MAPPING_FILE, 'r') as f:
+                job_id_to_repo_url = json.load(f)
+                logger.info(f"Loaded {len(job_id_to_repo_url)} job mappings from disk")
+        except Exception as e:
+            logger.error(f"Failed to load job mappings from disk: {str(e)}")
+
+
+def save_repositories():
+    """Save repositories to disk."""
+    try:
+        # Convert datetime objects to ISO format strings for JSON serialization
+        data_to_save = {}
+        for repo_url, repo_data in ingested_repositories.items():
+            data_to_save[repo_url] = repo_data.copy()
+            if isinstance(data_to_save[repo_url].get("ingested_at"), datetime):
+                data_to_save[repo_url]["ingested_at"] = data_to_save[repo_url]["ingested_at"].isoformat()
+        
+        with open(REPOSITORIES_FILE, 'w') as f:
+            json.dump(data_to_save, f, indent=2)
+        logger.debug(f"Saved {len(ingested_repositories)} repositories to disk")
+    except Exception as e:
+        logger.error(f"Failed to save repositories to disk: {str(e)}")
+
+
+def save_job_mappings():
+    """Save job mappings to disk."""
+    try:
+        with open(JOB_MAPPING_FILE, 'w') as f:
+            json.dump(job_id_to_repo_url, f, indent=2)
+        logger.debug(f"Saved {len(job_id_to_repo_url)} job mappings to disk")
+    except Exception as e:
+        logger.error(f"Failed to save job mappings to disk: {str(e)}")
+
+
+# Load persisted data on startup
+load_persisted_data()
 
 
 @app.get("/", response_model=HealthResponse)
@@ -107,16 +179,33 @@ async def ingest_repository(
         )
         
         ingestion_jobs[job_id] = job_status
+        job_id_to_repo_url[job_id] = request.repo_url
+        save_job_mappings()  # Persist the mapping
         
         # Start background task for ingestion
         from services.ingestion_orchestrator import run_ingestion
-        background_tasks.add_task(
-            run_ingestion,
-            job_id=job_id,
-            request=request,
-            jobs_dict=ingestion_jobs,
-            repos_dict=ingested_repositories
-        )
+        
+        def run_ingestion_wrapper():
+            """Wrapper to run ingestion in background with proper error handling."""
+            try:
+                run_ingestion(
+                    job_id=job_id,
+                    request=request,
+                    jobs_dict=ingestion_jobs,
+                    repos_dict=ingested_repositories
+                )
+                # Save repositories to disk after ingestion completes
+                save_repositories()
+            except Exception as e:
+                logger.error(f"Background task for job {job_id} failed: {str(e)}", exc_info=True)
+                # Ensure job status is marked as failed if not already set
+                if job_id in ingestion_jobs:
+                    ingestion_jobs[job_id].status = IngestionStatus.FAILED
+                    ingestion_jobs[job_id].error_message = str(e)
+                    ingestion_jobs[job_id].completed_at = datetime.now(timezone.utc)
+        
+        # Add the task to background tasks (now that it's a regular function, this will work)
+        background_tasks.add_task(run_ingestion_wrapper)
         
         logger.info(f"Started ingestion job {job_id} for {request.repo_url}")
         
@@ -136,10 +225,30 @@ async def ingest_repository(
 @app.get("/api/ingest/status/{job_id}", response_model=IngestionStatusResponse)
 async def get_ingestion_status(job_id: str):
     """Get the status of an ingestion job."""
-    if job_id not in ingestion_jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
+    if job_id in ingestion_jobs:
+        return ingestion_jobs[job_id]
     
-    return ingestion_jobs[job_id]
+    # Job not found - check if repository was successfully ingested (server may have restarted)
+    if job_id in job_id_to_repo_url:
+        repo_url = job_id_to_repo_url[job_id]
+        if repo_url in ingested_repositories:
+            # Repository was ingested, return a completed status
+            repo_data = ingested_repositories[repo_url]
+            logger.info(f"Job {job_id} not found, but repository {repo_url} is ingested. Returning completed status.")
+            return IngestionStatusResponse(
+                job_id=job_id,
+                status=IngestionStatus.COMPLETED,
+                repo_url=repo_url,
+                created_at=repo_data.get("ingested_at", datetime.now(timezone.utc)),
+                completed_at=repo_data.get("ingested_at", datetime.now(timezone.utc)),
+                documents_processed=repo_data.get("document_count", 0),
+                progress={
+                    "stage": "completed",
+                    "total_documents": repo_data.get("document_count", 0)
+                }
+            )
+    
+    raise HTTPException(status_code=404, detail="Job not found")
 
 
 @app.post("/api/query", response_model=QueryResponse)
@@ -176,21 +285,32 @@ async def list_repositories():
     """List all ingested repositories."""
     from models.schemas import Repository
     
-    repos = [
-        Repository(
-            repo_url=repo_data["repo_url"],
-            repo_name=repo_data["repo_name"],
-            ingested_at=repo_data["ingested_at"],
-            document_count=repo_data["document_count"],
-            last_commit_sha=repo_data.get("last_commit_sha")
+    try:
+        logger.info(f"Listing repositories. Total in dict: {len(ingested_repositories)}")
+        
+        repos = []
+        for repo_url, repo_data in ingested_repositories.items():
+            try:
+                repo = Repository(
+                    repo_url=repo_data["repo_url"],
+                    repo_name=repo_data["repo_name"],
+                    ingested_at=repo_data["ingested_at"],
+                    document_count=repo_data["document_count"],
+                    last_commit_sha=repo_data.get("last_commit_sha")
+                )
+                repos.append(repo)
+            except Exception as e:
+                logger.error(f"Failed to serialize repository {repo_url}: {str(e)}", exc_info=True)
+                # Continue with other repositories even if one fails
+        
+        logger.info(f"Returning {len(repos)} repositories")
+        return RepositoryListResponse(
+            repositories=repos,
+            total=len(repos)
         )
-        for repo_data in ingested_repositories.values()
-    ]
-    
-    return RepositoryListResponse(
-        repositories=repos,
-        total=len(repos)
-    )
+    except Exception as e:
+        logger.error(f"Error listing repositories: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list repositories: {str(e)}")
 
 
 if __name__ == "__main__":

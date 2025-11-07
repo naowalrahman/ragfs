@@ -3,7 +3,7 @@ Ingestion orchestrator that coordinates the entire ingestion pipeline.
 """
 import logging
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from models.schemas import IngestionRequest, IngestionStatus, IngestionStatusResponse
 from services.github_ingestion import GitHubIngestionService
@@ -13,7 +13,7 @@ from services.bedrock_service import BedrockService
 logger = logging.getLogger(__name__)
 
 
-async def run_ingestion(
+def run_ingestion(
     job_id: str,
     request: IngestionRequest,
     jobs_dict: Dict[str, IngestionStatusResponse],
@@ -29,9 +29,15 @@ async def run_ingestion(
         repos_dict: Shared dictionary for repository information
     """
     try:
+        logger.info(f"[{job_id}] Starting ingestion pipeline...")
         # Update status to in_progress
+        if job_id not in jobs_dict:
+            logger.error(f"[{job_id}] Job ID not found in jobs_dict! This should not happen.")
+            return
+        
         jobs_dict[job_id].status = IngestionStatus.IN_PROGRESS
         jobs_dict[job_id].progress = {"stage": "initializing"}
+        logger.info(f"[{job_id}] Status updated to IN_PROGRESS")
         
         # Initialize services
         github_service = GitHubIngestionService()
@@ -151,9 +157,25 @@ async def run_ingestion(
         # Get last commit SHA
         last_commit_sha = commits[0]['sha'] if commits else None
         
-        # Update job status to completed
+        # Store repository information BEFORE updating status to ensure it's available
+        # when the frontend polls for completion
+        completed_time = datetime.now(timezone.utc)
+        
+        repo_data = {
+            "repo_url": request.repo_url,
+            "repo_name": full_repo_name,
+            "ingested_at": completed_time,
+            "document_count": len(all_documents),
+            "last_commit_sha": last_commit_sha
+        }
+        
+        repos_dict[request.repo_url] = repo_data
+        logger.info(f"[{job_id}] Repository stored in repos_dict: {request.repo_url}")
+        logger.info(f"[{job_id}] Total repositories in dict: {len(repos_dict)}")
+        
+        # Update job status to completed (after repository is stored)
         jobs_dict[job_id].status = IngestionStatus.COMPLETED
-        jobs_dict[job_id].completed_at = datetime.utcnow()
+        jobs_dict[job_id].completed_at = completed_time
         jobs_dict[job_id].documents_processed = len(all_documents)
         jobs_dict[job_id].progress = {
             "stage": "completed",
@@ -165,25 +187,20 @@ async def run_ingestion(
             "kb_ingestion_job_id": kb_job_id
         }
         
-        # Store repository information
-        repos_dict[request.repo_url] = {
-            "repo_url": request.repo_url,
-            "repo_name": full_repo_name,
-            "ingested_at": datetime.utcnow(),
-            "document_count": len(all_documents),
-            "last_commit_sha": last_commit_sha
-        }
-        
-        logger.info(f"[{job_id}] Ingestion completed successfully!")
+        logger.info(f"[{job_id}] Ingestion completed successfully! Status: {jobs_dict[job_id].status}")
+        logger.info(f"[{job_id}] Repository should now be available in /api/repositories endpoint")
         
     except Exception as e:
         logger.error(f"[{job_id}] Ingestion failed: {str(e)}", exc_info=True)
         
-        # Update job status to failed
-        jobs_dict[job_id].status = IngestionStatus.FAILED
-        jobs_dict[job_id].completed_at = datetime.utcnow()
-        jobs_dict[job_id].error_message = str(e)
-        jobs_dict[job_id].progress = {"stage": "failed", "error": str(e)}
+        # Update job status to failed (if job exists in dict)
+        if job_id in jobs_dict:
+            jobs_dict[job_id].status = IngestionStatus.FAILED
+            jobs_dict[job_id].completed_at = datetime.now(timezone.utc)
+            jobs_dict[job_id].error_message = str(e)
+            jobs_dict[job_id].progress = {"stage": "failed", "error": str(e)}
+        else:
+            logger.error(f"[{job_id}] Cannot update job status - job not found in jobs_dict!")
         
         # Cleanup if local_path exists
         try:

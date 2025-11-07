@@ -64,9 +64,11 @@ export default function HomePage() {
   const loadRepositories = async () => {
     try {
       const response = await apiClient.listRepositories();
-      setRepositories(response.repositories);
-    } catch (error) {
+      setRepositories(response.repositories || []);
+    } catch (error: any) {
       console.error('Failed to load repositories:', error);
+      // Set empty array on error to avoid stale data
+      setRepositories([]);
     }
   };
 

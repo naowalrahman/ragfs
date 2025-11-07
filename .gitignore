@@ -31,6 +31,10 @@ wheels/
 temp_repos/
 *.log
 
+# Persistence files (runtime data)
+ingested_repositories.json
+job_id_to_repo_url.json
+
 # IDEs
 .vscode/
 .idea/

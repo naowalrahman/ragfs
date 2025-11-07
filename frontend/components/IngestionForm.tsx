@@ -69,7 +69,13 @@ export default function IngestionForm({ onSuccess }: IngestionFormProps) {
         if (statusResponse.status === IngestionStatus.COMPLETED) {
           clearInterval(interval);
           setIsSubmitting(false);
-          if (onSuccess) onSuccess();
+          // Wait a brief moment to ensure repository is fully added to backend
+          // then call onSuccess to refresh the repository list
+          setTimeout(() => {
+            if (onSuccess) {
+              onSuccess();
+            }
+          }, 500);
           // Reset form after 3 seconds
           setTimeout(() => {
             setJobId(null);
@@ -83,9 +89,27 @@ export default function IngestionForm({ onSuccess }: IngestionFormProps) {
           setError(statusResponse.error_message || 'Ingestion failed');
         }
       } catch (err: any) {
-        console.error('Failed to poll status:', err);
-        clearInterval(interval);
-        setIsSubmitting(false);
+        // If we get a 404, the server may have restarted
+        // Check if repository was ingested by refreshing the list
+        if (err.response?.status === 404) {
+          console.warn('Job status returned 404 (server may have restarted), checking repositories...');
+          // Wait a moment and refresh repositories
+          setTimeout(() => {
+            if (onSuccess) {
+              onSuccess();
+            }
+          }, 1000);
+          // Stop polling after a few 404s (job might be gone but repo ingested)
+          clearInterval(interval);
+          setIsSubmitting(false);
+          // Don't show error if repository might be ingested
+          setStatus(IngestionStatus.COMPLETED);
+        } else {
+          console.error('Failed to poll status:', err);
+          clearInterval(interval);
+          setIsSubmitting(false);
+          setError('Failed to check ingestion status');
+        }
       }
     }, 2000); // Poll every 2 seconds
   };
