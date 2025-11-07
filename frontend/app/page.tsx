@@ -3,122 +3,159 @@
 import * as React from 'react';
 import {
   Box,
-  Grid,
   Typography,
-  Tab,
-  Tabs,
   Paper,
+  Alert,
+  Divider,
+  Stack,
+  CircularProgress,
 } from '@mui/material';
 import IngestionForm from '@/components/IngestionForm';
-import SearchBar from '@/components/SearchBar';
-import ResultsView from '@/components/ResultsView';
-import RepositoryList from '@/components/RepositoryList';
-import { QueryResponse, Repository } from '@/types';
+import BranchSelector from '@/components/BranchSelector';
+import CommitList from '@/components/CommitList';
+import { Branch, CommitSummary } from '@/types';
 import { apiClient } from '@/lib/api';
 
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
-
-function TabPanel(props: TabPanelProps) {
-  const { children, value, index, ...other } = props;
-
-  return (
-    <div
-      role="tabpanel"
-      hidden={value !== index}
-      id={`tabpanel-${index}`}
-      aria-labelledby={`tab-${index}`}
-      {...other}
-    >
-      {value === index && <Box sx={{ pt: 3 }}>{children}</Box>}
-    </div>
-  );
-}
-
 export default function HomePage() {
-  const [tabValue, setTabValue] = React.useState(0);
-  const [searchResults, setSearchResults] = React.useState<QueryResponse | null>(null);
-  const [isSearching, setIsSearching] = React.useState(false);
-  const [repositories, setRepositories] = React.useState<Repository[]>([]);
+  // State for ingested repository
+  const [ingestedRepoUrl, setIngestedRepoUrl] = React.useState<string | null>(null);
+  const [ingestedRepoName, setIngestedRepoName] = React.useState<string | null>(null);
+  
+  // Branch and commit state
+  const [branches, setBranches] = React.useState<Branch[]>([]);
+  const [selectedBranch, setSelectedBranch] = React.useState<string | null>(null);
+  const [commits, setCommits] = React.useState<CommitSummary[]>([]);
+  const [isLoadingBranches, setIsLoadingBranches] = React.useState(false);
+  const [isLoadingCommits, setIsLoadingCommits] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
 
-  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setTabValue(newValue);
-  };
+  const handleIngestionSuccess = async (repoUrl: string, repoName: string) => {
+    console.log('handleIngestionSuccess called with:', { repoUrl, repoName });
+    setIngestedRepoUrl(repoUrl);
+    setIngestedRepoName(repoName);
+    setError(null);
+    setIsLoadingBranches(true);
 
-  const handleSearch = async (query: string) => {
-    setIsSearching(true);
     try {
-      const results = await apiClient.query({ query, max_results: 10 });
-      setSearchResults(results);
-    } catch (error) {
-      console.error('Search failed:', error);
-      // TODO: Show error notification
+      console.log('Loading branches for:', repoUrl);
+      // Load branches for the ingested repository
+      const response = await apiClient.listBranches(repoUrl);
+      console.log('Branches loaded:', response.branches.length);
+      setBranches(response.branches);
+      
+      // Auto-select default branch if available
+      const defaultBranch = response.branches.find(b => b.is_default);
+      console.log('Default branch:', defaultBranch?.name);
+      if (defaultBranch) {
+        await handleSelectBranch(repoUrl, defaultBranch.name);
+      }
+    } catch (err: any) {
+      console.error('Failed to load branches:', err);
+      setError(err.response?.data?.detail || err.message || 'Failed to load branches');
     } finally {
-      setIsSearching(false);
+      setIsLoadingBranches(false);
     }
   };
 
-  const loadRepositories = async () => {
+  const handleSelectBranch = async (repoUrl: string, branchName: string) => {
+    console.log('handleSelectBranch called with:', { repoUrl, branchName });
+    setSelectedBranch(branchName);
+    setCommits([]);
+    setError(null);
+    setIsLoadingCommits(true);
+
     try {
-      const response = await apiClient.listRepositories();
-      setRepositories(response.repositories);
-    } catch (error) {
-      console.error('Failed to load repositories:', error);
+      console.log('Loading commits for branch:', branchName);
+      const response = await apiClient.listCommits(repoUrl, branchName);
+      console.log('Commits loaded:', response.commits.length);
+      setCommits(response.commits);
+    } catch (err: any) {
+      console.error('Failed to load commits:', err);
+      setError(err.response?.data?.detail || err.message || 'Failed to load commits');
+    } finally {
+      setIsLoadingCommits(false);
     }
   };
-
-  React.useEffect(() => {
-    loadRepositories();
-  }, []);
 
   return (
     <Box>
       {/* Hero Section */}
       <Box sx={{ mb: 6, textAlign: 'center' }}>
         <Typography variant="h3" component="h1" gutterBottom fontWeight={700}>
-          AI-Powered Knowledge Search
+          AI-Powered Commit Analysis
         </Typography>
-        <Typography variant="h6" color="text.secondary" sx={{ mb: 4 }}>
-          Search across your entire software ecosystem - code, commits, issues, and PRs
+        <Typography variant="h6" color="text.secondary" sx={{ mb: 2 }}>
+          Understand what your code changes actually do with Claude AI
         </Typography>
-
-        {/* Search Bar */}
-        <SearchBar onSearch={handleSearch} isLoading={isSearching} />
+        <Typography variant="body2" color="text.secondary">
+          Ingest a repository, and instantly analyze commits with intelligent explanations
+        </Typography>
       </Box>
 
-      {/* Search Results */}
-      {searchResults && (
-        <Box sx={{ mb: 4 }}>
-          <ResultsView results={searchResults} />
-        </Box>
-      )}
-
-      {/* Tabs */}
-      <Paper elevation={0} sx={{ borderRadius: 2, overflow: 'hidden' }}>
-        <Tabs
-          value={tabValue}
-          onChange={handleTabChange}
-          aria-label="main tabs"
-          sx={{
-            borderBottom: 1,
-            borderColor: 'divider',
-          }}
-        >
-          <Tab label="Ingest Repository" id="tab-0" aria-controls="tabpanel-0" />
-          <Tab label="Repositories" id="tab-1" aria-controls="tabpanel-1" />
-        </Tabs>
-
-        <TabPanel value={tabValue} index={0}>
-          <IngestionForm onSuccess={loadRepositories} />
-        </TabPanel>
-
-        <TabPanel value={tabValue} index={1}>
-          <RepositoryList repositories={repositories} onRefresh={loadRepositories} />
-        </TabPanel>
+      {/* Ingestion Form */}
+      <Paper elevation={2} sx={{ p: 4, mb: 4 }}>
+        <IngestionForm onSuccess={handleIngestionSuccess} />
       </Paper>
+
+      {/* Commit Analysis Section - Shows after successful ingestion */}
+      {ingestedRepoUrl && (
+        <>
+          <Divider sx={{ my: 4 }} />
+          
+          <Box sx={{ mb: 4 }}>
+            <Typography variant="h5" gutterBottom fontWeight={600}>
+              Analyze Commits
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              Repository: <strong>{ingestedRepoName}</strong>
+            </Typography>
+
+            {/* Branch Selector */}
+            {isLoadingBranches && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
+                <Stack spacing={2} alignItems="center">
+                  <CircularProgress />
+                  <Typography variant="body2" color="text.secondary">
+                    Loading branches...
+                  </Typography>
+                </Stack>
+              </Box>
+            )}
+            
+            {!isLoadingBranches && branches.length > 0 && (
+              <Paper elevation={1} sx={{ p: 3, mb: 3 }}>
+                <Typography variant="h6" gutterBottom fontWeight={600}>
+                  Select Branch
+                </Typography>
+                <BranchSelector
+                  branches={branches}
+                  selectedBranch={selectedBranch}
+                  onSelectBranch={(branch) => handleSelectBranch(ingestedRepoUrl, branch)}
+                  isLoading={isLoadingBranches}
+                />
+              </Paper>
+            )}
+
+            {/* Error Display */}
+            {error && (
+              <Alert severity="error" sx={{ mb: 3 }}>
+                {error}
+              </Alert>
+            )}
+
+            {/* Commits List */}
+            {selectedBranch && (
+              <Paper elevation={1} sx={{ p: 3 }}>
+                <CommitList
+                  commits={commits}
+                  repoUrl={ingestedRepoUrl}
+                  isLoading={isLoadingCommits}
+                />
+              </Paper>
+            )}
+          </Box>
+        </>
+      )}
     </Box>
   );
 }

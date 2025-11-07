@@ -81,3 +81,59 @@ export interface HealthResponse {
   services: Record<string, string>;
 }
 
+export interface Branch {
+  name: string;
+  commit_sha: string;
+  is_default: boolean;
+}
+
+export interface BranchListResponse {
+  repo_url: string;
+  branches: Branch[];
+  total: number;
+}
+
+export interface CommitSummary {
+  sha: string;
+  message: string;
+  author: string;
+  author_email?: string;
+  date: string;
+  parents: string[];
+}
+
+export interface CommitListResponse {
+  repo_url: string;
+  branch: string;
+  commits: CommitSummary[];
+  total: number;
+}
+
+export interface CommitDetail {
+  sha: string;
+  message: string;
+  author: string;
+  author_email?: string;
+  date: string;
+  parents: string[];
+  diff: string;
+  stats: Record<string, any>;
+  files_changed: Array<{
+    filename: string;
+    additions: number;
+    deletions: number;
+    changes: number;
+    patch?: string;
+  }>;
+}
+
+export interface CommitExplanation {
+  commit_sha: string;
+  summary: string;
+  what_changed: string;
+  why_important: string;
+  technical_details: string;
+  business_impact?: string;
+  generated_at: string;
+}
+

@@ -98,3 +98,68 @@ class HealthResponse(BaseModel):
     timestamp: datetime
     services: Dict[str, str]
 
+
+class Branch(BaseModel):
+    """Branch information for a repository."""
+    name: str
+    commit_sha: str
+    is_default: bool = False
+
+
+class BranchListResponse(BaseModel):
+    """Response for listing branches."""
+    repo_url: str
+    branches: List[Branch]
+    total: int
+
+
+class CommitSummary(BaseModel):
+    """Summary information about a commit."""
+    sha: str
+    message: str
+    author: str
+    author_email: Optional[str] = None
+    date: datetime
+    parents: List[str] = Field(default_factory=list)
+
+
+class CommitListResponse(BaseModel):
+    """Response for listing commits."""
+    repo_url: str
+    branch: str
+    commits: List[CommitSummary]
+    total: int
+
+
+class FileChange(BaseModel):
+    """Information about a file changed in a commit."""
+    filename: str
+    additions: int
+    deletions: int
+    changes: int
+    patch: Optional[str] = None
+
+
+class CommitDetail(BaseModel):
+    """Detailed information about a commit including diff."""
+    sha: str
+    message: str
+    author: str
+    author_email: Optional[str] = None
+    date: datetime
+    parents: List[str] = Field(default_factory=list)
+    diff: str
+    stats: Dict[str, Any] = Field(default_factory=dict)
+    files_changed: List[FileChange] = Field(default_factory=list)
+
+
+class CommitExplanation(BaseModel):
+    """LLM-generated explanation of a commit."""
+    commit_sha: str
+    summary: str
+    what_changed: str
+    why_important: str
+    technical_details: str
+    business_impact: Optional[str] = None
+    generated_at: datetime
+
