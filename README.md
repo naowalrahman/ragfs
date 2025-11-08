@@ -2,18 +2,18 @@
 
 An all-in-one AI-powered knowledge platform that combines semantic search with **Claude Sonnet 4** to answer questions about your codebase using Retrieval-Augmented Generation (RAG).
 
-## 🎯 What This Does
+## What This Does
 
-Instead of just searching your code, **ask questions in natural language** and get comprehensive AI-generated answers based on your actual codebase:
+Instead of just searching your code, **ask questions in natural language** and get comprehensive AI-generated answers based on your actual codebase and full repository history:
 
 - ❓ "How does authentication work in this project?"
 - 🔍 "Where is the payment processing logic?"
-- 🐛 "What issues mention performance problems?"
+- 🐛 "What's the earliest issue that mentions performance problems?"
 - 📚 "Explain the database architecture"
 
 The system retrieves relevant code, commits, issues, and PRs, then uses **Claude Sonnet 4** to synthesize a clear answer with source references.
 
-## ✨ Features
+## Features
 
 - 🤖 **RAG with Claude Sonnet 4**: AI-generated answers based on retrieved context
 - 🔍 **Intelligent Code Search**: Semantic understanding across entire codebases
@@ -28,7 +28,7 @@ The system retrieves relevant code, commits, issues, and PRs, then uses **Claude
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   Frontend  │────▶│  FastAPI API │────▶│   GitHub    │
+│   Frontend  │────▶│  FastAPI API │◀────│   GitHub    │
 │  (Next.js)  │     │   (Python)   │     │     API     │
 └─────────────┘     └──────────────┘     └─────────────┘
                            │
@@ -44,10 +44,10 @@ The system retrieves relevant code, commits, issues, and PRs, then uses **Claude
        ▼                                        ▼
 ┌──────────────┐     ┌─────────────┐    ┌──────────────┐
 │   AWS S3     │────▶│   Bedrock   │    │   Claude     │
-│   Bucket     │     │ Knowledge   │◀───│  Sonnet 4    │
-└──────────────┘     │    Base     │    │  (via Bedrock)│
+│   Bucket     │     │ Knowledge   │───▶│  Sonnet 4    │
+└──────────────┘     │    Base     │    │ (via Bedrock)│
                      └─────────────┘    └──────────────┘
-                                              │
+                                               │
                       Query Flow:              │
                       1. Retrieve docs ────────┘
                       2. Generate answer with Claude
@@ -105,21 +105,16 @@ The system retrieves relevant code, commits, issues, and PRs, then uses **Claude
 
 ### Step 3: Enable Claude Model Access
 
-**⚠️ IMPORTANT: This step is required for RAG functionality**
-
 1. Navigate to **Amazon Bedrock** → **Model access**
 2. Click **Modify model access** or **Manage model access**
 3. Find **Anthropic** section
-4. Check the boxes for:
-   - ✅ Claude 3.5 Sonnet
-   - ✅ Claude Sonnet 4 (if available)
-   - ✅ Claude 3.5 Sonnet v2
-5. Review the **End User License Agreement (EULA)**
+4. Check the box for Claude Sonnet 4 (4.5 not currently working with Bedrock)
 6. Click **Request model access** or **Save changes**
 7. Wait for approval (usually instant for most AWS accounts)
 8. Verify status shows **Access granted** for Claude models
 
-**Note**: Without Claude model access, queries will fail with "Model not found" errors.
+> [!NOTE]
+> Without Claude model access, queries will fail with "Model not found" errors.
 
 ### Step 4: Create Bedrock Knowledge Base
 
@@ -200,14 +195,13 @@ The system retrieves relevant code, commits, issues, and PRs, then uses **Claude
 9. **Download credentials** or note down:
    - Access Key ID
    - Secret Access Key
-   - ⚠️ **Keep these secure!**
 
 ### Step 6: Verify Setup
 
 **Checklist - Ensure you have:**
 - ✅ S3 bucket created and noted
 - ✅ IAM role for Knowledge Base created with S3 permissions
-- ✅ Claude model access enabled (Sonnet 4 or 3.5)
+- ✅ Claude model access enabled (Sonnet 4)
 - ✅ Bedrock Knowledge Base created with data source
 - ✅ IAM user created with access keys
 - ✅ All IDs noted down:
@@ -216,6 +210,7 @@ The system retrieves relevant code, commits, issues, and PRs, then uses **Claude
   - S3 Bucket name
   - AWS Access Key ID
   - AWS Secret Access Key
+  - AWS Session Token (if using temporary auth for admin-managed Bedrock instance)
 
 **Important IAM Permissions for API User:**
 
@@ -276,15 +271,13 @@ pip install -r requirements.txt
 ```
 
 4. Configure environment variables:
-```bash
-cp .env.example .env
-```
 
 Edit `.env` with your AWS credentials and Knowledge Base details:
 ```env
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=your_access_key_here
 AWS_SECRET_ACCESS_KEY=your_secret_key_here
+AWS_ACCESS_TOKEN=your_access_token_here
 
 KNOWLEDGE_BASE_ID=ABCDEFGHIJ
 DATA_SOURCE_ID=KLMNOPQRST
@@ -475,7 +468,7 @@ curl -X POST "http://localhost:8000/api/ingest" \
    - Check that Knowledge Base is created and active in AWS Console
 
 2. **"Access Denied" errors**
-   - Verify IAM user permissions
+   - Verify IAM user permissions / AWS CLI credentials
    - Check that AWS credentials are correct in `.env`
    - Ensure Bedrock models are enabled
 
@@ -487,21 +480,3 @@ curl -X POST "http://localhost:8000/api/ingest" \
    - Check CloudWatch logs in AWS Console
    - Verify S3 bucket permissions
    - Ensure documents are being uploaded to S3
-
-## Cost Considerations
-
-- **AWS Bedrock**: Pay per embedding and query
-- **OpenSearch Serverless**: Minimum ~$700/month
-- **S3 Storage**: ~$0.023 per GB/month
-- **Data Transfer**: Check AWS pricing
-
-Consider using existing OpenSearch/Pinecone for cost optimization.
-
-## License
-
-MIT
-
-## Contributing
-
-Contributions welcome! Please open an issue or PR.
-
